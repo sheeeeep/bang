@@ -1,0 +1,8 @@
+[tool.ruff]
+target-version = "py39"
+
+[tool.pyright]
+pythonVersion = "3.9"
+typeCheckingMode = "basic"
+include = ["skillctl.py", "test_skillctl.py"]
+extraPaths = ["."]
