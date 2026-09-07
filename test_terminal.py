@@ -80,6 +80,7 @@ class PtySession:
         return self.output.decode("utf-8", errors="replace")
 
     def wait_for(self, *needles, timeout=None):
+        """Synchronize on transcript hooks; final behavior is checked in previews/files."""
         end = time.monotonic() + (self.deadline if timeout is None else timeout)
         while time.monotonic() < end:
             self.read_available()
@@ -102,6 +103,7 @@ class PtySession:
         os.write(self.master_fd, data)
 
     def send_and_wait_for_output(self, data, timeout=1.0):
+        self.read_available()
         before = len(self.output)
         self.send(data)
         end = time.monotonic() + timeout
@@ -208,6 +210,21 @@ class TerminalSelectTests(unittest.TestCase):
         self.assertEqual(code, 0, output)
         self.assert_not_linked("alpha")
         self.assert_linked("beta")
+
+    def test_common_csi_arrow_keys_do_not_cancel_the_chooser(self):
+        self.skill("alpha")
+        self.skill("beta")
+        self.skill("gamma")
+        session = self.open_select()
+        self.wait_for_terminal_chooser(session, "alpha", "beta", "gamma")
+        session.send("\x1b[B\x1b[B\x1b[A \r")
+        session.wait_for("新增链接: beta", "执行以上变更？")
+        session.send("y\r")
+        code, output = session.wait_exit()
+        self.assertEqual(code, 0, output)
+        self.assert_linked("beta")
+        self.assert_not_linked("alpha")
+        self.assert_not_linked("gamma")
 
     def test_space_selects_current_skill_and_enter_only_previews_until_confirmed(self):
         self.skill("alpha")
@@ -323,6 +340,27 @@ class TerminalSelectTests(unittest.TestCase):
         self.assert_not_linked("中文-tdd")
         self.assertEqual(exclude.read_bytes(), before)
 
+    def test_equivalent_unicode_encodings_match_the_same_name(self):
+        self.skill("CAFE\u0301")
+        session = self.open_select()
+        self.wait_for_terminal_chooser(session)
+        session.send("café \r")
+        session.wait_for("新增链接:", "执行以上变更？")
+        session.send("y\r")
+        code, output = session.wait_exit()
+        self.assertEqual(code, 0, output)
+        self.assert_linked("CAFE\u0301")
+
+    def test_unusable_terminal_fails_cleanly_without_writes(self):
+        self.skill("alpha")
+        session = self.open_select(rows=4, cols=40)
+        code, output = session.wait_exit()
+        self.assertEqual(code, 1, output)
+        self.assertIn("终端太小", output)
+        self.assertNotIn("Traceback", output)
+        self.assert_not_linked("alpha")
+        self.assertEqual(termios.tcgetattr(session.master_fd), session.initial_attrs)
+
     def test_ctrl_c_exits_without_traceback_and_restores_terminal_modes(self):
         self.skill("alpha")
         session = self.open_select()
@@ -331,9 +369,9 @@ class TerminalSelectTests(unittest.TestCase):
         code, output = session.wait_exit()
         self.assertEqual(code, 130, output)
         self.assertNotIn("Traceback", output)
-        attrs = termios.tcgetattr(session.master_fd)
-        self.assertTrue(attrs[3] & termios.ECHO, output)
-        self.assertTrue(attrs[3] & termios.ICANON, output)
+        self.assertEqual(
+            termios.tcgetattr(session.master_fd), session.initial_attrs, output
+        )
         self.assert_not_linked("alpha")
 
 

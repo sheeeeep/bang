@@ -95,6 +95,33 @@ def terminal_line(screen: curses.window, row: int, text: str, attr: int = 0) -> 
         pass  # A resize can invalidate coordinates between getmaxyx and addstr.
 
 
+def terminal_key(screen: curses.window) -> str | int | None:
+    key = screen.get_wch()
+    if key != "\x1b":
+        return key
+    # curses handles terminfo keys; also accept normal-mode CSI arrows from
+    # terminals that keep sending them after application-keypad mode is enabled.
+    screen.timeout(100)
+    try:
+        following = screen.get_wch()
+        if following in ("[", "O"):
+            ending = screen.get_wch()
+            return (
+                {"A": curses.KEY_UP, "B": curses.KEY_DOWN}.get(ending)
+                if isinstance(ending, str)
+                else None
+            )
+        if isinstance(following, str):
+            curses.unget_wch(following)
+        else:
+            curses.ungetch(following)
+    except curses.error:
+        pass  # No following key: this was a standalone Esc.
+    finally:
+        screen.timeout(-1)
+    return "\x1b"
+
+
 def choose_terminal(
     screen: curses.window, names: list[str], selected: set[str]
 ) -> set[str]:
@@ -107,41 +134,44 @@ def choose_terminal(
         pass  # Some terminals cannot hide the cursor.
     curses.set_escdelay(100)
     while True:
-        visible = [name for name in names if query.casefold() in name.casefold()]
+        needle = unicodedata.normalize("NFC", query.casefold())
+        visible = [
+            name
+            for name in names
+            if needle in unicodedata.normalize("NFC", name.casefold())
+        ]
         cursor = max(0, min(cursor, len(visible) - 1))
         rows, columns = screen.getmaxyx()
-        small = rows < 5 or columns < 20
-        screen.erase()
-        if small:
-            terminal_line(screen, 0, "终端太小，请放大；Esc 退出")
-        else:
-            terminal_line(screen, 0, f"搜索: {query}")
-            terminal_line(
-                screen, 1, f"已选: {len(selected)} | 匹配: {len(visible)}/{len(names)}"
+        if rows < 5 or columns < 20:
+            raise ValueError(
+                "终端太小，需要至少 5 行、20 列；请放大后重试，未执行变更。"
             )
-            page_size = rows - 4
-            start = cursor // page_size * page_size
-            for index, name in enumerate(visible[start : start + page_size], start):
-                terminal_line(
-                    screen,
-                    2 + index - start,
-                    f"{'>' if index == cursor else ' '} [{'x' if name in selected else ' '}] {name}",
-                    curses.A_REVERSE if index == cursor else 0,
-                )
-            if not visible:
-                terminal_line(screen, 2, "无匹配项（隐藏的勾选仍保留）")
-            terminal_line(screen, rows - 2, "↑/↓ 移动  空格 勾选  Enter 预览")
-            terminal_line(screen, rows - 1, "输入搜索 | Backspace 删除 | Esc 清空/退出")
+        screen.erase()
+        terminal_line(screen, 0, f"搜索: {query}")
+        terminal_line(
+            screen, 1, f"已选: {len(selected)} | 匹配: {len(visible)}/{len(names)}"
+        )
+        page_size = rows - 4
+        start = cursor // page_size * page_size
+        for index, name in enumerate(visible[start : start + page_size], start):
+            terminal_line(
+                screen,
+                2 + index - start,
+                f"{'>' if index == cursor else ' '} [{'x' if name in selected else ' '}] {name}",
+                curses.A_REVERSE if index == cursor else 0,
+            )
+        if not visible:
+            terminal_line(screen, 2, "无匹配项（隐藏的勾选仍保留）")
+        terminal_line(screen, rows - 2, "↑/↓ 移动  空格 勾选  Enter 预览")
+        terminal_line(screen, rows - 1, "输入搜索 | Backspace 删除 | Esc 清空/退出")
         screen.refresh()
-        key = screen.get_wch()
+        key = terminal_key(screen)
         if key in ("\x03", "\x04"):
             raise KeyboardInterrupt
         if key == "\x1b":
             if not query:
                 raise EOFError
             query, cursor = "", 0
-        elif small:
-            continue
         elif key in ("\n", "\r", curses.KEY_ENTER):
             return selected
         elif key == curses.KEY_UP:
@@ -197,7 +227,9 @@ def exclude_bytes(path: Path) -> bytes:
     return path.read_bytes() if path.exists() else b""
 
 
-def exclusion_update(content: bytes, add: set[str], remove: set[str]) -> bytes:
+def exclusion_update(
+    content: bytes, add: set[str], remove: set[str], precompose: bool = False
+) -> bytes:
     prefix, suffix, owned = content, b"", set()
     if BEGIN in content or END in content:
         if content.count(BEGIN) != 1 or content.count(END) != 1:
@@ -207,6 +239,8 @@ def exclusion_update(content: bytes, add: set[str], remove: set[str]) -> bytes:
         owned = set(block.decode("utf-8").splitlines())
 
     def pattern(name: str) -> str:
+        if precompose:
+            name = unicodedata.normalize("NFC", name)
         escaped = "".join("\\" + c if c in "\\*?[] " else c for c in name)
         return f"/.agents/skills/{escaped}"
 
@@ -280,7 +314,18 @@ def select_skills(library: Path) -> int:
         elif name in current:
             removals.add(name)
             print(f"移除链接: {name}")
-    after = exclusion_update(before, actionable, removals)
+    precompose = (
+        git(
+            root,
+            "config",
+            "--type=bool",
+            "--default=false",
+            "--get",
+            "core.precomposeunicode",
+        )
+        == "true"
+    )
+    after = exclusion_update(before, actionable, removals, precompose)
     print(f"Git 本地排除: {exclude}（{'更新' if before != after else '不变'}）")
     for line in sorted(actionable):
         print(f"  排除 .agents/skills/{line}")
@@ -322,7 +367,9 @@ def select_skills(library: Path) -> int:
         except (OSError, ValueError) as error:
             print(f"失败: {name}: {error}")
             conflicts += 1
-    write_exclude(exclude, before, exclusion_update(before, linked, removed))
+    write_exclude(
+        exclude, before, exclusion_update(before, linked, removed, precompose)
+    )
     for name in sorted(linked):
         result = subprocess.run(
             [
