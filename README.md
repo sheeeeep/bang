@@ -52,7 +52,7 @@ python3 /Users/bytedance/agent-workspace/my-skill-cli/skillctl.py collect
 ### collect：归集全局入口
 
 - 仅从 `~/.agents/skills` 归集，来源软链接跳过；不扫描其他 agent 的目录，不处理安装器锁文件。
-- 同名真实 skill 逐项询问是否升级，默认跳过；同名普通文件、无 `SKILL.md` 的目录或软链接不会覆盖。
+- 同名真实 skill 默认备份旧版并整份替换，不再逐项询问；同名普通文件、无 `SKILL.md` 的目录或软链接不会覆盖。
 - 最后统一预览确认，取消时不创建任何目录或备份。
 - 先将新内容复制到 `~/my-skills/.backups/skill-<随机标识>/incoming`，成功后才发布；升级旧版保存在该目录的 `old/`，每次独立备份。
 - 完整替换而非合并，已有项目链接保持有效。成功归集后全局入口消失，不留全局软链接；其他 agent 对旧位置的引用可能失效，需自行处理。

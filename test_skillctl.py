@@ -145,30 +145,29 @@ class CliTests(unittest.TestCase):
         self.assertIn("跳过来源软链接", result.stdout)
         self.assertIn("失效", result.stdout)
 
-    def test_upgrade_requires_confirmation_and_keeps_distinct_backups(self):
+    def test_upgrade_defaults_to_backup_with_one_overall_confirmation(self):
         old = self.skill(self.library, "alpha", "old")
         (old / "obsolete.txt").write_text("remove on upgrade")
         source = self.skill(self.source, "alpha", "new")
         link = self.project / ".agents/skills/alpha"
         link.parent.mkdir(parents=True)
         link.symlink_to(old)
-        declined = self.cli("collect", "n\ny\n")
-        self.assertEqual(declined.returncode, 0, declined.stdout)
-        self.assertEqual((old / "SKILL.md").read_text(), "old")
-        self.assertTrue(source.exists())
-        cancelled = self.cli("collect", "y\nn\n")
+        cancelled = self.cli("collect", "n\n")
         self.assertEqual(cancelled.returncode, 0, cancelled.stdout)
         self.assertFalse((self.library / ".backups").exists())
         self.assertEqual((old / "SKILL.md").read_text(), "old")
-        result = self.cli("collect", "y\ny\n")
+        self.assertTrue(source.exists())
+        result = self.cli("collect", "y\n")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.count("[y/N]"), 1)
+        self.assertIn("备份并替换: alpha", result.stdout)
         self.assertEqual((link / "SKILL.md").read_text(), "new")
         self.assertFalse((old / "obsolete.txt").exists())
         self.assertFalse(source.exists())
         backups = list((self.library / ".backups").glob("*/old/SKILL.md"))
         self.assertEqual([p.read_text() for p in backups], ["old"])
         self.skill(self.source, "alpha", "newer")
-        again = self.cli("collect", "y\ny\n")
+        again = self.cli("collect", "y\n")
         self.assertEqual(again.returncode, 0, again.stdout)
         self.assertEqual((link / "SKILL.md").read_text(), "newer")
         self.assertEqual(
@@ -202,12 +201,12 @@ class CliTests(unittest.TestCase):
         old = self.skill(self.library, "alpha", "old")
         source = self.skill(self.source, "alpha", "new")
         with patch("shutil.copyfile", side_effect=OSError("disk full")):
-            code, output = self.run_main("collect", ["y", "y"])
+            code, output = self.run_main("collect", ["y"])
         self.assertEqual(code, 1, output)
         self.assertIn("恢复目录", output)
         self.assertEqual((old / "SKILL.md").read_text(), "old")
         self.assertEqual((source / "SKILL.md").read_text(), "new")
-        retried = self.cli("collect", "y\ny\n")
+        retried = self.cli("collect", "y\n")
         self.assertEqual(retried.returncode, 0, retried.stdout)
         self.assertEqual((old / "SKILL.md").read_text(), "new")
 
@@ -293,7 +292,7 @@ class CliTests(unittest.TestCase):
             return replace(src, dst)
 
         with patch("os.replace", side_effect=fail_publish):
-            code, output = self.run_main("collect", ["y", "y"])
+            code, output = self.run_main("collect", ["y"])
         self.assertEqual(code, 1, output)
         self.assertIn("已恢复旧版", output)
         self.assertEqual((old / "SKILL.md").read_text(), "old")

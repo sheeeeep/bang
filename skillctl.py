@@ -506,11 +506,9 @@ def collect_skills(source: Path, library: Path) -> int:
         ):
             print(f"冲突，跳过非真实 skill 目标: {destination}")
             errors += 1
-        elif confirm(f"同名: {name}，备份旧版后整份替换？"):
+        else:
             approved.append(name)
             print(f"备份并替换: {name}")
-        else:
-            print(f"跳过: {name}（未确认升级）")
     print(f"备份／恢复目录: {library / '.backups'}（每项独立目录，不覆盖旧备份）")
     print("警告：搬走后不保留全局软链接；其他 agent 对旧位置的引用可能失效。")
     if not confirm("执行以上归集？"):
