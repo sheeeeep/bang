@@ -16,7 +16,10 @@ END = b"# END skillctl managed links\n"
 
 def git(root: Path, *args: str) -> str:
     result = subprocess.run(
-        ["git", "-C", str(root), *args], capture_output=True, text=True, check=False,
+        ["git", "-C", str(root), *args],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode:
         raise ValueError(result.stderr.strip() or "需要非 bare Git 项目")
@@ -26,7 +29,13 @@ def git(root: Path, *args: str) -> str:
 def signature(path: Path) -> tuple[int, int, int, int, int] | None:
     try:
         stat = path.lstat()
-        return stat.st_dev, stat.st_ino, stat.st_mode, stat.st_mtime_ns, stat.st_ctime_ns
+        return (
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_mode,
+            stat.st_mtime_ns,
+            stat.st_ctime_ns,
+        )
     except FileNotFoundError:
         return None
 
@@ -43,7 +52,7 @@ def skills(base: Path) -> dict[str, Path]:
     found = {}
     if base.exists():
         for path in sorted(base.iterdir()):
-            if path.name.startswith("."):
+            if path.name == ".backups" or path.name.startswith(".skillctl-cleanup-"):
                 continue
             if path.is_symlink():
                 print(f"跳过来源软链接: {path}")
@@ -100,16 +109,19 @@ def exclusion_update(content: bytes, add: set[str], remove: set[str]) -> bytes:
         prefix, rest = content.split(BEGIN)
         block, suffix = rest.split(END)
         owned = set(block.decode("utf-8").splitlines())
+
     def pattern(name: str) -> str:
         escaped = "".join("\\" + c if c in "\\*?[] " else c for c in name)
         return f"/.agents/skills/{escaped}"
+
     owned.difference_update(pattern(name) for name in remove)
     # Reassert owned patterns after user rules, including negations.
     owned.update(pattern(name) for name in add)
     block = BEGIN + ("\n".join(sorted(owned)) + "\n").encode() + END if owned else b""
-    if block and prefix and not prefix.endswith(b"\n"):
-        prefix += b"\n"
-    return prefix + block + suffix
+    unmanaged = prefix + suffix
+    if block and unmanaged and not unmanaged.endswith(b"\n"):
+        unmanaged += b"\n"
+    return unmanaged + block
 
 
 def write_exclude(path: Path, before: bytes, after: bytes) -> None:
@@ -139,15 +151,19 @@ def select_skills(library: Path) -> int:
     real_directory(links)
     available = skills(library)
     source_states = {name: signature(path) for name, path in available.items()}
-    current = {
-        p.name for p in links.iterdir() if managed_link(p, library)
-    } if links.exists() else set()
+    current = (
+        {p.name for p in links.iterdir() if managed_link(p, library)}
+        if links.exists()
+        else set()
+    )
     names = sorted(set(available) | current)
     if not names:
         print("个人库没有可选 skill。")
         return 0
     chosen = choose(names, current)
-    exclude = Path(git(root, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude"))
+    exclude = Path(
+        git(root, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
+    )
     before = exclude_bytes(exclude)
     states = {name: signature(links / name) for name in names}
     actionable, removals = set(), set()
@@ -178,7 +194,10 @@ def select_skills(library: Path) -> int:
     real_directory(links)
     real_directory(library)
     for name in actionable:
-        if signature(library / name) != source_states[name] or not (library / name / "SKILL.md").is_file():
+        if (
+            signature(library / name) != source_states[name]
+            or not (library / name / "SKILL.md").is_file()
+        ):
             raise ValueError(f"预览后来源发生变化: {library / name}，请重试")
     if exclude_bytes(exclude) != before:
         raise ValueError("Git exclude 在预览后发生变化，请重试")
@@ -188,9 +207,9 @@ def select_skills(library: Path) -> int:
             root, "ls-files", "-z", "--", f":(literal).agents/skills/{name}"
         ):
             raise ValueError(f"预览后路径发生变化: {links / name}，请重试")
-    write_exclude(exclude, before, after)
     if actionable:
         links.mkdir(parents=True, exist_ok=True)
+    linked, removed = set(), set()
     for name in sorted(actionable | removals):
         path = links / name
         try:
@@ -198,21 +217,49 @@ def select_skills(library: Path) -> int:
                 raise ValueError("路径发生变化，请重试")
             if name in removals:
                 path.unlink()
-            elif name not in current:
-                path.symlink_to(library / name, target_is_directory=True)
+                removed.add(name)
+            else:
+                if name not in current:
+                    path.symlink_to(library / name, target_is_directory=True)
+                linked.add(name)
             print(f"成功: {name}")
         except (OSError, ValueError) as error:
             print(f"失败: {name}: {error}")
+            conflicts += 1
+    write_exclude(exclude, before, exclusion_update(before, linked, removed))
+    for name in sorted(linked):
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "check-ignore",
+                "-q",
+                "--",
+                f".agents/skills/{name}",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode:
+            print(
+                f"失败: {name} 未被 Git 排除，请检查更高优先级规则（如 .gitignore）；未自动修改这些规则。"
+            )
             conflicts += 1
     return 1 if conflicts else 0
 
 
 def tree_state(path: Path) -> dict[str, tuple[int, int, int, int, int] | None]:
     """Snapshot metadata without following directory symlinks."""
+    # ponytail: metadata checks detect ordinary edits, not adversarial writers;
+    # use a shared locking protocol if concurrent editing becomes a requirement.
     state = {".": signature(path)}
     if path.is_dir() and not path.is_symlink():
+
         def fail(error: OSError) -> None:
             raise error
+
         for root, dirs, files in os.walk(path, onerror=fail, followlinks=False):
             for name in dirs + files:
                 child = Path(root) / name
@@ -234,6 +281,66 @@ def publish_directory(source: Path, destination: Path) -> None:
         raise
 
 
+def restore_old(work: Path | None, destination: Path) -> None:
+    if (
+        work is None
+        or not (work / "old").exists()
+        or signature(destination) is not None
+    ):
+        return
+    try:
+        real_directory(destination.parent)
+        publish_directory(work / "old", destination)
+        print(f"已恢复旧版: {destination}")
+    except (OSError, ValueError) as error:
+        print(f"恢复失败，旧版仍在 {work / 'old'}: {error}")
+
+
+def collect_one(
+    path: Path,
+    destination: Path,
+    source_state: dict[str, tuple[int, int, int, int, int] | None],
+    target_state: dict[str, tuple[int, int, int, int, int] | None],
+) -> int:
+    backup_root = destination.parent / ".backups"
+    work = None
+    cleanup = None
+    try:
+        real_directory(path.parent)
+        real_directory(backup_root)
+        if tree_state(path) != source_state or tree_state(destination) != target_state:
+            raise ValueError("来源或目标在预览后发生变化，请重试")
+        backup_root.mkdir(parents=True, exist_ok=True)
+        work = Path(tempfile.mkdtemp(prefix="skill-", dir=backup_root))
+        shutil.copytree(path, work / "incoming", symlinks=True)
+        real_directory(path.parent)
+        real_directory(backup_root)
+        if tree_state(path) != source_state or tree_state(destination) != target_state:
+            raise ValueError("复制期间来源或目标发生变化，未替换")
+        if target_state["."] is not None:
+            publish_directory(destination, work / "old")
+            print(f"备份: {work / 'old'}")
+        publish_directory(work / "incoming", destination)
+        real_directory(path.parent)
+        if tree_state(path) != source_state:
+            raise ValueError("来源发生变化，已保留来源和新目标，请检查后重试")
+        # Hide the consumed source before cleanup: a failed rmtree must never
+        # leave a partial skill eligible for another upgrade.
+        cleanup = Path(tempfile.mkdtemp(prefix=".skillctl-cleanup-", dir=path.parent))
+        publish_directory(path, cleanup / "consumed")
+        shutil.rmtree(cleanup)
+        if not (work / "old").exists():
+            work.rmdir()
+        print(f"成功: {path.name} → {destination}")
+        return 0
+    except (OSError, ValueError, KeyboardInterrupt) as error:
+        restore_old(work, destination)
+        print(
+            f"失败／中断: {path.name}: {error}; 来源: {path}; 目标: {destination}; 恢复目录: {work}; 待清理: {cleanup}"
+        )
+        return 130 if isinstance(error, KeyboardInterrupt) else 1
+
+
 def collect_skills(source: Path, library: Path) -> int:
     incoming = skills(source)
     real_directory(library / ".backups")
@@ -249,7 +356,11 @@ def collect_skills(source: Path, library: Path) -> int:
         if targets[name]["."] is None:
             print(f"搬入: {name}")
             approved.append(name)
-        elif destination.is_symlink() or not destination.is_dir() or not (destination / "SKILL.md").is_file():
+        elif (
+            destination.is_symlink()
+            or not destination.is_dir()
+            or not (destination / "SKILL.md").is_file()
+        ):
             print(f"冲突，跳过非真实 skill 目标: {destination}")
             errors += 1
         elif confirm(f"同名: {name}，备份旧版后整份替换？"):
@@ -263,47 +374,11 @@ def collect_skills(source: Path, library: Path) -> int:
         print("已取消，无修改。")
         return 0
     for name in approved:
-        path, destination = incoming[name], library / name
-        work = None
-        cleanup = None
-        try:
-            real_directory(source)
-            real_directory(library / ".backups")
-            if tree_state(path) != sources[name] or tree_state(destination) != targets[name]:
-                raise ValueError("来源或目标在预览后发生变化，请重试")
-            (library / ".backups").mkdir(parents=True, exist_ok=True)
-            work = Path(tempfile.mkdtemp(prefix="skill-", dir=library / ".backups"))
-            shutil.copytree(path, work / "incoming", symlinks=True)
-            real_directory(source)
-            real_directory(library / ".backups")
-            if tree_state(path) != sources[name] or tree_state(destination) != targets[name]:
-                raise ValueError("复制期间来源或目标发生变化，未替换")
-            if targets[name]["."] is not None:
-                publish_directory(destination, work / "old")
-                print(f"备份: {work / 'old'}")
-            publish_directory(work / "incoming", destination)
-            real_directory(source)
-            if tree_state(path) != sources[name]:
-                raise ValueError("来源发生变化，已保留来源和新目标，请检查后重试")
-            # Hide the consumed source before cleanup: a failed rmtree must never
-            # leave a partial skill eligible for another upgrade.
-            cleanup = Path(tempfile.mkdtemp(prefix=".skillctl-cleanup-", dir=source))
-            publish_directory(path, cleanup / "consumed")
-            shutil.rmtree(cleanup)
-            if not (work / "old").exists():
-                work.rmdir()
-            print(f"成功: {name} → {destination}")
-        # pi-lens-ignore: ast-grep:no-boolean-in-except
-        except (OSError, ValueError) as error:
-            errors += 1
-            # Restore only into a vacant destination; never overwrite a late arrival.
-            if work is not None and (work / "old").exists() and signature(destination) is None:
-                try:
-                    publish_directory(work / "old", destination)
-                    print(f"已恢复旧版: {destination}")
-                except (OSError, ValueError) as restore_error:
-                    print(f"恢复失败，旧版仍在 {work / 'old'}: {restore_error}")
-            print(f"失败: {name}: {error}; 来源: {path}; 目标: {destination}; 恢复目录: {work}; 待清理: {cleanup}")
+        code = collect_one(incoming[name], library / name, sources[name], targets[name])
+        if code == 130:
+            print("已中断，后续项未执行。")
+            return code
+        errors += code
     return 1 if errors else 0
 
 

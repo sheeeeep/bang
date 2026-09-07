@@ -32,8 +32,11 @@ class CliTests(unittest.TestCase):
 
     def git(self, *args):
         return subprocess.run(
-            ["git", "-C", str(self.project), *args], env=self.env,
-            text=True, capture_output=True, check=True,
+            ["git", "-C", str(self.project), *args],
+            env=self.env,
+            text=True,
+            capture_output=True,
+            check=True,
         ).stdout
 
     def skill(self, base, name, content="new"):
@@ -44,15 +47,26 @@ class CliTests(unittest.TestCase):
 
     def cli(self, command, answers, cwd=None):
         return subprocess.run(
-            [sys.executable, str(CLI), command], cwd=cwd or self.project,
-            env=self.env, input=answers, text=True, capture_output=True, check=False,
+            [sys.executable, str(CLI), command],
+            cwd=cwd or self.project,
+            env=self.env,
+            input=answers,
+            text=True,
+            capture_output=True,
+            check=False,
         )
 
     def run_main(self, command, answer):
         output = io.StringIO()
-        with patch.dict(os.environ, self.env, clear=True), patch(
-            "pathlib.Path.cwd", return_value=self.project,
-        ), patch("builtins.input", side_effect=answer), contextlib.redirect_stdout(output):
+        with (
+            patch.dict(os.environ, self.env, clear=True),
+            patch(
+                "pathlib.Path.cwd",
+                return_value=self.project,
+            ),
+            patch("builtins.input", side_effect=answer),
+            contextlib.redirect_stdout(output),
+        ):
             code = skillctl.main([command])
         return code, output.getvalue()
 
@@ -69,7 +83,9 @@ class CliTests(unittest.TestCase):
         self.assertEqual((links / "alpha").resolve(), a)
         self.assertEqual((links / "beta").resolve(), b)
         self.assertEqual(
-            self.git("check-ignore", ".agents/skills/alpha", ".agents/skills/beta").splitlines(),
+            self.git(
+                "check-ignore", ".agents/skills/alpha", ".agents/skills/beta"
+            ).splitlines(),
             [".agents/skills/alpha", ".agents/skills/beta"],
         )
         exclude = self.project / ".git/info/exclude"
@@ -140,6 +156,10 @@ class CliTests(unittest.TestCase):
         self.assertEqual(declined.returncode, 0, declined.stdout)
         self.assertEqual((old / "SKILL.md").read_text(), "old")
         self.assertTrue(source.exists())
+        cancelled = self.cli("collect", "y\nn\n")
+        self.assertEqual(cancelled.returncode, 0, cancelled.stdout)
+        self.assertFalse((self.library / ".backups").exists())
+        self.assertEqual((old / "SKILL.md").read_text(), "old")
         result = self.cli("collect", "y\ny\n")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((link / "SKILL.md").read_text(), "new")
@@ -152,7 +172,10 @@ class CliTests(unittest.TestCase):
         self.assertEqual(again.returncode, 0, again.stdout)
         self.assertEqual((link / "SKILL.md").read_text(), "newer")
         self.assertEqual(
-            sorted(p.read_text() for p in (self.library / ".backups").glob("*/old/SKILL.md")),
+            sorted(
+                p.read_text()
+                for p in (self.library / ".backups").glob("*/old/SKILL.md")
+            ),
             ["new", "old"],
         )
         selection = self.cli("select", "q\n")
@@ -163,11 +186,13 @@ class CliTests(unittest.TestCase):
         exclude = self.project / ".git/info/exclude"
         before = exclude.read_bytes()
         answers = iter(["1", "", "y"])
+
         def answer(prompt):
             if "执行" in prompt:
                 source.rename(self.library / "moved")
                 source.symlink_to(self.home / "unrelated")
             return next(answers)
+
         code, output = self.run_main("select", answer)
         self.assertEqual(code, 1, output)
         self.assertFalse((self.project / ".agents").exists())
@@ -200,9 +225,11 @@ class CliTests(unittest.TestCase):
 
     def test_late_collection_target_is_not_overwritten(self):
         source = self.skill(self.source, "alpha", "incoming")
+
         def answer(prompt):
             self.skill(self.library, "alpha", "late arrival")
             return "y"
+
         code, output = self.run_main("collect", answer)
         self.assertEqual(code, 1, output)
         self.assertEqual((source / "SKILL.md").read_text(), "incoming")
@@ -221,7 +248,16 @@ class CliTests(unittest.TestCase):
         self.assertEqual(list(outside.iterdir()), [])
 
     def test_git_worktree_and_literal_skill_names(self):
-        self.git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "init")
+        self.git(
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "init",
+        )
         worktree = self.home / "worktree"
         self.git("worktree", "add", "-qb", "test-worktree", str(worktree))
         name = "a[1]*? space"
@@ -229,8 +265,18 @@ class CliTests(unittest.TestCase):
         result = self.cli("select", "1\n\ny\n", cwd=worktree)
         self.assertEqual(result.returncode, 0, result.stdout)
         checked = subprocess.run(
-            ["git", "-C", str(worktree), "check-ignore", "--", f".agents/skills/{name}"],
-            env=self.env, capture_output=True, text=True, check=False,
+            [
+                "git",
+                "-C",
+                str(worktree),
+                "check-ignore",
+                "--",
+                f".agents/skills/{name}",
+            ],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         self.assertEqual(checked.returncode, 0, checked.stderr)
         self.assertTrue((worktree / ".agents/skills" / name).is_symlink())
@@ -240,16 +286,78 @@ class CliTests(unittest.TestCase):
         old = self.skill(self.library, "alpha", "old")
         source = self.skill(self.source, "alpha", "new")
         replace = os.replace
+
         def fail_publish(src, dst):
             if Path(src).name == "incoming":
                 raise OSError("publish denied")
             return replace(src, dst)
+
         with patch("os.replace", side_effect=fail_publish):
             code, output = self.run_main("collect", ["y", "y"])
         self.assertEqual(code, 1, output)
         self.assertIn("已恢复旧版", output)
         self.assertEqual((old / "SKILL.md").read_text(), "old")
         self.assertEqual((source / "SKILL.md").read_text(), "new")
+
+    def test_failed_link_changes_leave_exclusions_matching_actual_links(self):
+        self.skill(self.library, "alpha")
+        exclude = self.project / ".git/info/exclude"
+        before = exclude.read_bytes()
+        with patch("os.symlink", side_effect=OSError("link denied")):
+            code, output = self.run_main("select", ["1", "", "y"])
+        self.assertEqual(code, 1, output)
+        self.assertEqual(exclude.read_bytes(), before)
+        created = self.cli("select", "1\n\ny\n")
+        self.assertEqual(created.returncode, 0, created.stdout)
+        before = exclude.read_bytes()
+        with patch("pathlib.Path.unlink", side_effect=OSError("unlink denied")):
+            code, output = self.run_main("select", ["1", "", "y"])
+        self.assertEqual(code, 1, output)
+        self.assertEqual(exclude.read_bytes(), before)
+        self.assertTrue((self.project / ".agents/skills/alpha").is_symlink())
+
+    def test_interrupt_during_collection_reports_recovery_locations(self):
+        self.skill(self.source, "alpha")
+        with patch("shutil.rmtree", side_effect=KeyboardInterrupt):
+            code, output = self.run_main("collect", ["y"])
+        self.assertEqual(code, 130, output)
+        self.assertIn("alpha", output)
+        self.assertIn(".skillctl-cleanup-", output)
+        self.assertIn("恢复目录", output)
+        self.assertEqual((self.library / "alpha/SKILL.md").read_text(), "new")
+
+    def test_user_exclude_rules_are_preserved_without_overriding_managed_rules(self):
+        self.skill(self.library, "alpha")
+        self.assertEqual(self.cli("select", "1\n\ny\n").returncode, 0)
+        exclude = self.project / ".git/info/exclude"
+        with exclude.open("a") as stream:
+            stream.write("# user rule\n!/.agents/skills/alpha\n")
+        result = self.cli("select", "\ny\n")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn(b"# user rule\n!/.agents/skills/alpha\n", exclude.read_bytes())
+        self.assertEqual(
+            self.git("check-ignore", ".agents/skills/alpha"), ".agents/skills/alpha\n"
+        )
+
+    def test_higher_priority_gitignore_is_reported_without_modifying_it(self):
+        self.skill(self.library, "alpha")
+        ignore = self.project / ".gitignore"
+        ignore.write_text("!/.agents/skills/alpha\n")
+        result = self.cli("select", "1\n\ny\n")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("未被 Git 排除", result.stdout)
+        self.assertEqual(ignore.read_text(), "!/.agents/skills/alpha\n")
+
+    def test_hidden_skill_names_work_but_recovery_directories_stay_hidden(self):
+        self.skill(self.source, ".hidden")
+        collected = self.cli("collect", "y\n")
+        self.assertEqual(collected.returncode, 0, collected.stdout)
+        self.assertTrue((self.library / ".hidden/SKILL.md").is_file())
+        self.skill(self.library, ".backups/nested", "backup")
+        selected = self.cli("select", "1\n\ny\n")
+        self.assertEqual(selected.returncode, 0, selected.stdout)
+        self.assertTrue((self.project / ".agents/skills/.hidden").is_symlink())
+        self.assertNotIn("nested", selected.stdout)
 
 
 if __name__ == "__main__":
