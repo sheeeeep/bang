@@ -4,5 +4,5 @@ target-version = "py39"
 [tool.pyright]
 pythonVersion = "3.9"
 typeCheckingMode = "basic"
-include = ["skillctl.py", "test_skillctl.py"]
+include = ["skillctl.py", "test_skillctl.py", "test_terminal.py"]
 extraPaths = ["."]

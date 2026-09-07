@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import curses
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 
 BEGIN = b"# BEGIN skillctl managed links\n"
@@ -68,7 +71,100 @@ def confirm(message: str) -> bool:
     return input(f"{message} [y/N] ").strip().lower() == "y"
 
 
+def terminal_line(screen: curses.window, row: int, text: str, attr: int = 0) -> None:
+    rows, columns = screen.getmaxyx()
+    if not 0 <= row < rows:
+        return
+    # ponytail: cell-width clipping, not grapheme layout; use a dedicated renderer
+    # only if complex emoji names need exact visual alignment.
+    clipped = ""
+    width = 0
+    for char in text:
+        char = char if char.isprintable() else "?"
+        width += (
+            0
+            if unicodedata.combining(char)
+            else (2 if unicodedata.east_asian_width(char) in "WF" else 1)
+        )
+        if width >= columns:
+            break
+        clipped += char
+    try:
+        screen.addstr(row, 0, clipped, attr)
+    except curses.error:
+        pass  # A resize can invalidate coordinates between getmaxyx and addstr.
+
+
+def choose_terminal(
+    screen: curses.window, names: list[str], selected: set[str]
+) -> set[str]:
+    selected = set(selected)
+    query = ""
+    cursor = 0
+    try:
+        curses.curs_set(0)
+    except curses.error:
+        pass  # Some terminals cannot hide the cursor.
+    curses.set_escdelay(100)
+    while True:
+        visible = [name for name in names if query.casefold() in name.casefold()]
+        cursor = max(0, min(cursor, len(visible) - 1))
+        rows, columns = screen.getmaxyx()
+        small = rows < 5 or columns < 20
+        screen.erase()
+        if small:
+            terminal_line(screen, 0, "终端太小，请放大；Esc 退出")
+        else:
+            terminal_line(screen, 0, f"搜索: {query}")
+            terminal_line(
+                screen, 1, f"已选: {len(selected)} | 匹配: {len(visible)}/{len(names)}"
+            )
+            page_size = rows - 4
+            start = cursor // page_size * page_size
+            for index, name in enumerate(visible[start : start + page_size], start):
+                terminal_line(
+                    screen,
+                    2 + index - start,
+                    f"{'>' if index == cursor else ' '} [{'x' if name in selected else ' '}] {name}",
+                    curses.A_REVERSE if index == cursor else 0,
+                )
+            if not visible:
+                terminal_line(screen, 2, "无匹配项（隐藏的勾选仍保留）")
+            terminal_line(screen, rows - 2, "↑/↓ 移动  空格 勾选  Enter 预览")
+            terminal_line(screen, rows - 1, "输入搜索 | Backspace 删除 | Esc 清空/退出")
+        screen.refresh()
+        key = screen.get_wch()
+        if key in ("\x03", "\x04"):
+            raise KeyboardInterrupt
+        if key == "\x1b":
+            if not query:
+                raise EOFError
+            query, cursor = "", 0
+        elif small:
+            continue
+        elif key in ("\n", "\r", curses.KEY_ENTER):
+            return selected
+        elif key == curses.KEY_UP:
+            cursor = max(0, cursor - 1)
+        elif key == curses.KEY_DOWN:
+            cursor = min(len(visible) - 1, cursor + 1)
+        elif key == " ":
+            if visible:
+                selected.symmetric_difference_update([visible[cursor]])
+        elif key in ("\b", "\x7f", curses.KEY_BACKSPACE):
+            query, cursor = query[:-1], 0
+        elif isinstance(key, str) and key.isprintable():
+            query, cursor = query + key, 0
+
+
 def choose(names: list[str], selected: set[str]) -> set[str]:
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            return curses.wrapper(choose_terminal, names, selected)
+        except curses.error as error:
+            raise ValueError(
+                f"无法使用终端选择器，请检查 TERM 和终端设置: {error}"
+            ) from error
     selected = set(selected)
     while True:
         for index, name in enumerate(names, 1):

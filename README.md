@@ -4,27 +4,43 @@
 
 ## 使用
 
+推荐通过 `skill` 命令使用：
+
 ```sh
 # 在新项目根目录或其子目录运行
-python3 /Users/bytedance/agent-workspace/my-skill-cli/skillctl.py select
+skill select
 
 # 手动下载／复制 skill 到 ~/.agents/skills 后，在任意目录运行
-python3 /Users/bytedance/agent-workspace/my-skill-cli/skillctl.py collect
+skill collect
 ```
 
-可选：给可执行脚本建立命令链接（确保 `~/.local/bin` 在 PATH 中）：
+给可执行脚本建立命令链接（确保 `~/.local/bin` 在 PATH 中）。如目标已存在，先自行检查，不要强制覆盖：
 
 ```sh
 mkdir -p ~/.local/bin
-ln -s /Users/bytedance/agent-workspace/my-skill-cli/skillctl.py ~/.local/bin/skillctl
-skillctl select
-skillctl collect
+ln -s /Users/bytedance/agent-workspace/my-skill-cli/skillctl.py ~/.local/bin/skill
+skill select
+skill collect
+```
+
+也可直接运行脚本：
+
+```sh
+python3 /Users/bytedance/agent-workspace/my-skill-cli/skillctl.py select
+python3 /Users/bytedance/agent-workspace/my-skill-cli/skillctl.py collect
 ```
 
 ### select：同步项目选择
 
 - 扫描 `~/my-skills` 的一级真实目录，只列出含 `SKILL.md` 的 skill（支持点号开头的名称）；忽略来源软链接，以及保留的 `.backups`、`.skillctl-cleanup-*` 恢复目录。
-- `[x]` 为已选项。输入编号切换，可一次输入 `1 3 5`；回车查看预览，再输入 `y` 执行。`q`、Ctrl-C 或输入结束均停止。
+- 当 stdin 和 stdout 都是 TTY 时，使用 Python 标准库 `curses` 键盘界面，无新依赖：
+  - ↑ / ↓ 移动焦点，不改变勾选；长列表可滚动显示。
+  - 空格切换当前项；已隐藏的勾选项会保留，并计入最终预览。
+  - 直接输入文字按 skill 名称实时搜索，大小写不敏感；Backspace 编辑搜索词。
+  - Enter 进入变更预览；预览后仍需单独输入 `y` 确认才会执行。
+  - Esc 在搜索词非空时先清空搜索；搜索词为空时取消退出，不修改文件系统或 Git 排除规则。
+  - Ctrl-C 取消退出，不修改。
+- 当 stdin 或 stdout 不是 TTY（例如管道输入、重定向、自动化脚本）时，保留旧的编号选择界面：`[x]` 为已选项，输入编号切换，可一次输入 `1 3 5`；回车查看预览，再输入 `y` 执行。`q`、Ctrl-C 或输入结束均停止。
 - 创建 `.agents/skills/<名称>` → `~/my-skills/<名称>` 的链接；取消已有选项只移除项目链接。
 - 用 Git 定位当前工作树根目录，不以当前子目录充当项目根目录。非 Git 或 bare 仓库报错且不修改。
 - 使用 Git 返回的本地 `info/exclude` 路径，支持 `.git` 为文件的 worktree；同仓库多个 worktree 共享该排除文件。
