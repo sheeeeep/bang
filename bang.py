@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import curses
+import importlib.resources
 import json
 import os
 import shutil
@@ -628,6 +629,92 @@ def init_config(path: Path, library: str | None, source: str | None) -> int:
     return 0
 
 
+def init_agent() -> int:
+    """选择模板、目标名称和是否备份，确认后写入当前目录。"""
+    templates = {"1": "common", "2": "js"}
+    while True:
+        answer = input(
+            "选择模板 1. common（通用）  2. js（JavaScript） [1]，q 取消: "
+        ).strip()
+        if answer.lower() == "q":
+            raise EOFError
+        if not answer or answer in templates or answer in templates.values():
+            break
+        print("请输入 1、2、common 或 js。")
+    template = templates.get(answer or "1", answer)
+    names = {"1": "AGENTS.md", "2": "AGENTS.override.md"}
+    while True:
+        answer = input(
+            "创建为 1. AGENTS.md  2. AGENTS.override.md [1]，q 取消: "
+        ).strip()
+        if answer.lower() == "q":
+            raise EOFError
+        if not answer or answer in names or answer in names.values():
+            break
+        print("请输入 1 或 2。")
+    target = Path.cwd() / names.get(answer or "1", answer)
+    real_directory(target.parent)
+    before = signature(target)
+    if target.is_symlink() or (before is not None and not target.is_file()):
+        raise ValueError(f"拒绝覆盖软链接或非普通文件: {target}")
+    content = (
+        importlib.resources.files("bang_templates")
+        .joinpath(f"AGENTS.{template}.md")
+        .read_bytes()
+    )
+    print(f"模板: {template}")
+    print(f"目标文件: {target}")
+    backup_existing = False
+    if before is not None:
+        while True:
+            answer = input("是否备份旧文件？ [Y/n]，q 取消: ").strip().lower()
+            if answer == "q":
+                raise EOFError
+            if answer in ("", "y", "n"):
+                break
+            print("请输入 y 或 n。")
+        backup_existing = answer != "n"
+        if backup_existing:
+            print(
+                f"旧文件将备份为当前目录下的 {target.name}.bak-<随机标识>，不覆盖历史备份。"
+            )
+        else:
+            print("不备份：确认后将直接覆盖旧文件，无法通过本次备份恢复。")
+    if not confirm("写入以上文件？"):
+        print("已取消，无修改。")
+        return 0
+    real_directory(target.parent)
+    if signature(target) != before:
+        raise ValueError("目标在预览后发生变化，请重试")
+    with tempfile.NamedTemporaryFile(
+        dir=target.parent, prefix=".bang-agent-", delete=False
+    ) as stream:
+        temporary = Path(stream.name)
+        try:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+            if before is not None:
+                temporary.chmod(target.stat().st_mode & 0o777)
+            if backup_existing:
+                with tempfile.NamedTemporaryFile(
+                    dir=target.parent, prefix=f"{target.name}.bak-", delete=False
+                ) as backup:
+                    backup_path = Path(backup.name)
+                print(f"备份位置: {backup_path}")
+                shutil.copy2(target, backup_path)
+            if signature(target) != before:
+                raise ValueError("目标在写入前发生变化，未替换，请重试")
+            if before is None:
+                os.link(temporary, target)  # 独占创建，拒绝覆盖确认后出现的文件。
+            else:
+                os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+    print(f"已写入: {target}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="bang", description="个人 AI 环境初始化与 skill 管理"
@@ -636,6 +723,9 @@ def main(argv: list[str] | None = None) -> int:
     init = commands.add_parser("init", help="配置此设备的 skill 目录")
     init.add_argument("--library", help="个人 skill 库（绝对路径或 ~/ 开头）")
     init.add_argument("--source", help="待归集的全局入口（绝对路径或 ~/ 开头）")
+    init.add_subparsers(dest="init_action").add_parser(
+        "agent", help="在当前目录创建 agent 指引文件"
+    )
     skill = commands.add_parser("skill", help="管理 skill")
     actions = skill.add_subparsers(dest="action", required=True)
     actions.add_parser("select", help="选择并链接当前项目的 skill")
@@ -644,6 +734,10 @@ def main(argv: list[str] | None = None) -> int:
     path = Path.home().resolve() / ".config/bang/config.json"
     try:
         if args.command == "init":
+            if args.init_action == "agent":
+                if args.library is not None or args.source is not None:
+                    parser.error("init agent 不接受 --library 或 --source")
+                return init_agent()
             return init_config(path, args.library, args.source)
         library, source = config_paths(load_config(path))
         if args.action == "select":

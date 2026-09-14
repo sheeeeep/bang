@@ -1,0 +1,16 @@
+{
+  "features": [
+    {
+      "id": "agent-template-selection",
+      "description": "bang init agent 先选择 common 或 js 模板，再选择目标名称并确认写入",
+      "status": "completed",
+      "verification": "python3 -B -m unittest -q：38 项通过；bang.py、test_bang.py 主语言服务器诊断为 0；git diff --check 通过"
+    },
+    {
+      "id": "agent-optional-backup",
+      "description": "目标存在时选择是否备份，默认备份，跳过备份仍须确认覆盖；新文件不询问",
+      "status": "completed",
+      "verification": "python3 -B -m unittest -q：39 项通过；bang.py、test_bang.py 主语言服务器诊断为 0；git diff --check 通过"
+    }
+  ]
+}

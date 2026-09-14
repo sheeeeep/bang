@@ -82,6 +82,156 @@ class CliTests(unittest.TestCase):
             check=False,
         )
 
+    def test_init_agent_creation_backup_and_cancellation(self):
+        """验证两种模板的创建、备份与各阶段取消。"""
+        template = CLI.parent / "bang_templates/AGENTS.common.md"
+        # 子目录必须写入执行目录，而非 Git 项目根目录。
+        nested = self.project / "nested"
+        nested.mkdir()
+        self.project = nested
+        for answers, code in (
+            ("1\n1\nn\n", 0),
+            ("q\n", 130),
+            ("", 130),
+            ("1\nq\n", 130),
+            ("1\n", 130),
+            ("1\n1\n", 130),
+        ):
+            result = self.init_cli(answers, "agent")
+            self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+            self.assertEqual(list(self.project.iterdir()), [])
+        for selection, name in (("1", "AGENTS.md"), ("2", "AGENTS.override.md")):
+            with self.subTest(name=name):
+                target = self.project / name
+                result = self.init_cli(
+                    f"invalid\ncommon\ninvalid\n{selection}\ny\n", "agent"
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(target.read_bytes(), template.read_bytes())
+                target.write_bytes(b"old version")
+                result = self.init_cli(f"common\n{selection}\ny\nn\n", "agent")
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(target.read_bytes(), b"old version")
+                self.assertEqual(list(self.project.glob(f"{name}.bak-*")), [])
+                for content in (b"old version", b"second version"):
+                    target.write_bytes(content)
+                    result = self.init_cli(f"1\n{selection}\ny\ny\n", "agent")
+                    self.assertEqual(
+                        result.returncode, 0, result.stdout + result.stderr
+                    )
+                    self.assertEqual(target.read_bytes(), template.read_bytes())
+                backups = list(self.project.glob(f"{name}.bak-*"))
+                self.assertEqual(len(backups), 2)
+                self.assertEqual(
+                    {p.read_bytes() for p in backups},
+                    {b"old version", b"second version"},
+                )
+        self.assertFalse((self.home / ".config").exists())
+        self.assertEqual(list(self.project.glob(".bang-agent-*")), [])
+
+    def test_init_agent_optional_backup(self):
+        """验证备份默认值、跳过备份、输入校验与取消均不破坏已有文件。"""
+        target = self.project / "AGENTS.md"
+        for answers, code, written, backed_up in (
+            ("\ny\n", 0, True, True),
+            ("invalid\nY\ny\n", 0, True, True),
+            ("n\ny\n", 0, True, False),
+            ("n\nn\n", 0, False, False),
+            ("y\nn\n", 0, False, False),
+            ("q\n", 130, False, False),
+            ("", 130, False, False),
+            ("n\n", 130, False, False),
+        ):
+            with self.subTest(answers=answers):
+                target.write_bytes(b"old")
+                target.chmod(0o640)
+                result = self.init_cli(f"1\n1\n{answers}", "agent")
+                self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+                expected = (
+                    (CLI.parent / "bang_templates/AGENTS.common.md").read_bytes()
+                    if written
+                    else b"old"
+                )
+                self.assertEqual(target.read_bytes(), expected)
+                self.assertEqual(target.stat().st_mode & 0o777, 0o640)
+                backups = list(self.project.glob("AGENTS.md.bak-*"))
+                self.assertEqual(len(backups), int(backed_up))
+                for backup in backups:
+                    self.assertEqual(backup.read_bytes(), b"old")
+                    backup.unlink()
+                self.assertEqual(list(self.project.glob(".bang-agent-*")), [])
+                if answers.startswith("n"):
+                    self.assertIn("不备份", result.stdout)
+
+    def test_init_agent_template_choices(self):
+        """验证模板编号、名称和默认值对两种目标均写入完整原文。"""
+        for choice, template in (
+            ("", "common"),
+            ("1", "common"),
+            ("common", "common"),
+            ("2", "js"),
+            ("js", "js"),
+        ):
+            for selection, name in (("1", "AGENTS.md"), ("2", "AGENTS.override.md")):
+                with self.subTest(choice=choice, name=name):
+                    backup_answer = "y\n" if (self.project / name).exists() else ""
+                    result = self.init_cli(
+                        f"{choice}\n{selection}\n{backup_answer}y\n", "agent"
+                    )
+                    self.assertEqual(
+                        result.returncode, 0, result.stdout + result.stderr
+                    )
+                    self.assertIn(f"模板: {template}", result.stdout)
+                    self.assertEqual(
+                        (self.project / name).read_bytes(),
+                        (
+                            CLI.parent / f"bang_templates/AGENTS.{template}.md"
+                        ).read_bytes(),
+                    )
+
+    def test_init_agent_rejects_links_and_preserves_old_file_on_failure(self):
+        """验证拒绝危险目标，写入失败时保留原文件与备份。"""
+        target = self.project / "AGENTS.md"
+        outside = self.home / "outside.md"
+        outside.write_bytes(b"outside")
+        target.symlink_to(outside)
+        self.assertEqual(self.init_cli("1\n1\ny\n", "agent").returncode, 1)
+        self.assertEqual(outside.read_bytes(), b"outside")
+        target.unlink()
+        target.mkdir()
+        self.assertEqual(self.init_cli("1\n1\ny\n", "agent").returncode, 1)
+        target.rmdir()
+        target.write_bytes(b"old")
+        with (
+            patch("pathlib.Path.cwd", return_value=self.project),
+            patch("builtins.input", side_effect=["1", "1", "y", "y"]),
+            patch("bang.os.replace", side_effect=OSError("write failed")),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(bang.main(["init", "agent"]), 1)
+        self.assertEqual(target.read_bytes(), b"old")
+        self.assertEqual(
+            next(self.project.glob("AGENTS.md.bak-*")).read_bytes(), b"old"
+        )
+        self.assertEqual(list(self.project.glob(".bang-agent-*")), [])
+
+    def test_init_agent_detects_changes_after_preview(self):
+        target = self.project / "AGENTS.md"
+
+        def changed(_):
+            target.write_bytes(b"concurrent change")
+            return True
+
+        with (
+            patch("pathlib.Path.cwd", return_value=self.project),
+            patch("builtins.input", return_value="1"),
+            patch("bang.confirm", side_effect=changed),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(bang.main(["init", "agent"]), 1)
+        self.assertEqual(target.read_bytes(), b"concurrent change")
+        self.assertEqual(list(self.project.glob("*.bak-*")), [])
+
     def test_init_defaults_cancel_and_eof_do_not_touch_skills(self):
         config = self.home / ".config/bang/config.json"
         for answers, expected in (("\n\nn\n", 0), ("", 130)):
