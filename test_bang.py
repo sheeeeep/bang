@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import json
 import os
 import subprocess
 import sys
@@ -10,9 +11,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import skillctl
+import bang
 
-CLI = Path(__file__).with_name("skillctl.py")
+CLI = Path(__file__).with_name("bang.py")
 
 
 class CliTests(unittest.TestCase):
@@ -47,7 +48,7 @@ class CliTests(unittest.TestCase):
 
     def cli(self, command, answers, cwd=None):
         return subprocess.run(
-            [sys.executable, str(CLI), command],
+            [sys.executable, str(CLI), "skill", command],
             cwd=cwd or self.project,
             env=self.env,
             input=answers,
@@ -67,8 +68,132 @@ class CliTests(unittest.TestCase):
             patch("builtins.input", side_effect=answer),
             contextlib.redirect_stdout(output),
         ):
-            code = skillctl.main([command])
+            code = bang.main(["skill", command])
         return code, output.getvalue()
+
+    def init_cli(self, answers, *args):
+        return subprocess.run(
+            [sys.executable, str(CLI), "init", *args],
+            cwd=self.project,
+            env=self.env,
+            input=answers,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def test_init_defaults_cancel_and_eof_do_not_touch_skills(self):
+        config = self.home / ".config/bang/config.json"
+        for answers, expected in (("\n\nn\n", 0), ("", 130)):
+            result = self.init_cli(answers)
+            self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+            self.assertFalse(config.parent.exists())
+        result = self.init_cli("\n\ny\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        before = config.read_bytes()
+        self.assertEqual(
+            json.loads(before),
+            {
+                "library": "~/my-skills",
+                "source": "~/.agents/skills",
+            },
+        )
+        self.assertFalse(self.library.exists())
+        self.assertFalse(self.source.exists())
+        self.assertEqual(config.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.init_cli("\n\ny\n").returncode, 0)
+        self.assertEqual(config.read_bytes(), before)
+        self.assertEqual(self.init_cli("~/changed\n\nn\n").returncode, 0)
+        self.assertEqual(config.read_bytes(), before)
+
+    def test_configured_paths_drive_both_skill_commands(self):
+        library = self.home / "custom library"
+        source = self.home / "incoming"
+        self.skill(source, "alpha")
+        result = self.init_cli(
+            "y\n", "--library", "~/custom library", "--source", str(source)
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = self.cli("collect", "y\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((library / "alpha/SKILL.md").is_file())
+        self.assertFalse((source / "alpha").exists())
+        result = self.cli("select", "1\n\ny\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            (self.project / ".agents/skills/alpha").resolve(), library / "alpha"
+        )
+        self.assertFalse(self.library.exists())
+
+    def test_invalid_config_and_overlapping_roots_fail_without_writes(self):
+        config = self.home / ".config/bang/config.json"
+        config.parent.mkdir(parents=True)
+        for content in (
+            "{broken",
+            "[]",
+            '{"library": 42, "source": "~/in"}',
+            '{"library": "relative", "source": "~/in"}',
+            '{"library": "~/same", "source": "~/same"}',
+            '{"library": "~/a", "source": "~/a/child"}',
+            '{"library": "~/a/child", "source": "~/a"}',
+            '{"library": "~/a", "source": "~/b", "typo": true}',
+            json.dumps({"library": "~/a", "source": "~/b\u0000"}),
+        ):
+            with self.subTest(content=content):
+                config.write_text(content)
+                result = self.cli("collect", "y\n")
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual(config.read_text(), content)
+                self.assertFalse(self.library.exists())
+        config.unlink()
+        outside = self.home / "outside.json"
+        outside.write_text("{}")
+        config.symlink_to(outside)
+        result = self.init_cli("\n\ny\n")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(outside.read_text(), "{}")
+
+    def test_init_rejects_redirected_paths_and_preserves_existing_config_on_failure(
+        self,
+    ):
+        self.assertEqual(self.init_cli("\n\ny\n").returncode, 0)
+        config = self.home / ".config/bang/config.json"
+        before = config.read_bytes()
+        self.library.mkdir()
+        redirected = self.home / "redirected"
+        redirected.symlink_to(self.library)
+        result = self.init_cli("y\n", "--library", str(redirected), "--source", "~/in")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(config.read_bytes(), before)
+        with (
+            patch.dict(os.environ, self.env, clear=True),
+            patch("builtins.input", return_value="y"),
+            patch("os.replace", side_effect=OSError("disk failure")),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            code = bang.main(["init", "--library", "~/new", "--source", "~/in"])
+        self.assertEqual(code, 1)
+        self.assertEqual(config.read_bytes(), before)
+        self.assertEqual(list(config.parent.iterdir()), [config])
+
+    def test_command_hierarchy_requires_skill_group(self):
+        for args in (
+            ["--help"],
+            ["skill", "--help"],
+            ["init", "--help"],
+            ["select"],
+            ["skill"],
+        ):
+            result = subprocess.run(
+                [sys.executable, str(CLI), *args],
+                env=self.env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0 if "--help" in args else 2)
+            self.assertIn("bang", result.stdout + result.stderr)
 
     def test_project_selection_syncs_links_and_local_git_exclusions(self):
         a = self.skill(self.library, "alpha")
@@ -100,6 +225,43 @@ class CliTests(unittest.TestCase):
         self.assertTrue(a.is_dir())
         self.assertTrue((links / "beta").is_symlink())
         self.assertEqual(ignore.read_text(), "keep-me\n")
+
+    def test_non_git_selection_continues_without_exclusions(self):
+        project = self.home / "plain"
+        project.mkdir()
+        source = self.skill(self.library, "alpha")
+        link = project / ".agents/skills/alpha"
+        cancelled = self.cli("select", "1\n\nn\n", cwd=project)
+        self.assertEqual(cancelled.returncode, 0, cancelled.stdout + cancelled.stderr)
+        self.assertFalse((project / ".agents").exists())
+        for answers, selected in (
+            ("1\n\ny\n", True),
+            ("\ny\n", True),
+            ("1\n\ny\n", False),
+        ):
+            result = self.cli("select", answers, cwd=project)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("不是 Git 工程，跳过 Git exclude", result.stdout)
+            self.assertNotIn("Git 本地排除:", result.stdout)
+            self.assertEqual(link.is_symlink(), selected)
+            if selected:
+                self.assertEqual(link.resolve(), source)
+            self.assertTrue(source.is_dir())
+            self.assertFalse((project / ".git").exists())
+        owned = self.skill(project / ".agents/skills", "alpha", "project-owned")
+        conflict = self.cli("select", "1\n\ny\n", cwd=project)
+        self.assertEqual(conflict.returncode, 1, conflict.stdout + conflict.stderr)
+        self.assertIn("冲突", conflict.stdout)
+        self.assertEqual((owned / "SKILL.md").read_text(), "project-owned")
+
+    def test_invalid_git_metadata_still_fails(self):
+        (self.project / ".git").rename(self.project / "git-backup")
+        (self.project / ".git").write_text("invalid gitfile\n")
+        self.skill(self.library, "alpha")
+        result = self.cli("select", "1\n\ny\n")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertNotIn("跳过 Git exclude", result.stdout)
+        self.assertFalse((self.project / ".agents").exists())
 
     def test_cancel_and_conflicts_never_modify_unowned_or_tracked_paths(self):
         for name in ("directory", "external", "tracked", "valid"):
@@ -234,12 +396,12 @@ class CliTests(unittest.TestCase):
         self.assertEqual((source / "SKILL.md").read_text(), "incoming")
         self.assertEqual((self.library / "alpha/SKILL.md").read_text(), "late arrival")
 
-    def test_non_git_and_redirected_project_directories_are_rejected(self):
+    def test_non_git_eof_cancels_and_redirected_project_is_rejected(self):
         self.skill(self.library, "alpha")
         outside = self.home / "outside"
         outside.mkdir()
         non_git = self.cli("select", "", cwd=outside)
-        self.assertEqual(non_git.returncode, 1, non_git.stdout)
+        self.assertEqual(non_git.returncode, 130, non_git.stdout)
         self.assertFalse((outside / ".agents").exists())
         (self.project / ".agents").symlink_to(outside)
         redirected = self.cli("select", "1\n\ny\n")

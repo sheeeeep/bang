@@ -1,4 +1,4 @@
-"""Terminal acceptance tests for `skill select`.
+"""Terminal acceptance tests for `bang skill select`.
 
 These tests exercise the agreed seam only: the real CLI attached to a real PTY,
 with an isolated HOME and real files/Git repository.  They intentionally do not
@@ -20,7 +20,7 @@ import time
 import unittest
 from pathlib import Path
 
-CLI = Path(__file__).with_name("skillctl.py")
+CLI = Path(__file__).with_name("bang.py")
 
 
 class PtySession:
@@ -170,7 +170,7 @@ class TerminalSelectTests(unittest.TestCase):
 
     def open_select(self, *, rows=24, cols=80):
         session = PtySession(
-            [sys.executable, str(CLI), "select"],
+            [sys.executable, str(CLI), "skill", "select"],
             cwd=self.project,
             env=self.env,
             rows=rows,

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import curses
+import json
 import os
 import shutil
 import subprocess
@@ -13,6 +14,7 @@ import tempfile
 import unicodedata
 from pathlib import Path
 
+# Keep the on-disk markers compatible with existing skillctl installations.
 BEGIN = b"# BEGIN skillctl managed links\n"
 END = b"# END skillctl managed links\n"
 
@@ -23,6 +25,7 @@ def git(root: Path, *args: str) -> str:
         capture_output=True,
         text=True,
         check=False,
+        env={**os.environ, "LC_ALL": "C"},
     )
     if result.returncode:
         raise ValueError(result.stderr.strip() or "需要非 bare Git 项目")
@@ -276,7 +279,15 @@ def write_exclude(path: Path, before: bytes, after: bytes) -> None:
 
 
 def select_skills(library: Path) -> int:
-    root = Path(git(Path.cwd(), "rev-parse", "--show-toplevel"))
+    root = Path.cwd()
+    is_git = True
+    try:
+        root = Path(git(root, "rev-parse", "--show-toplevel"))
+    except ValueError as error:
+        if not str(error).startswith("fatal: not a git repository"):
+            raise
+        is_git = False
+        print("提示：当前目录不是 Git 工程，跳过 Git exclude，继续执行。")
     links = root / ".agents/skills"
     real_directory(links)
     available = skills(library)
@@ -291,16 +302,28 @@ def select_skills(library: Path) -> int:
         print("个人库没有可选 skill。")
         return 0
     chosen = choose(names, current)
-    exclude = Path(
-        git(root, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
+    exclude = (
+        Path(
+            git(
+                root,
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-path",
+                "info/exclude",
+            )
+        )
+        if is_git
+        else None
     )
-    before = exclude_bytes(exclude)
+    before = exclude_bytes(exclude) if exclude is not None else b""
     states = {name: signature(links / name) for name in names}
     actionable, removals = set(), set()
     conflicts = 0
     for name in names:
         path = links / name
-        tracked = git(root, "ls-files", "-z", "--", f":(literal).agents/skills/{name}")
+        tracked = is_git and git(
+            root, "ls-files", "-z", "--", f":(literal).agents/skills/{name}"
+        )
         if tracked or (signature(path) is not None and name not in current):
             print(f"冲突，跳过: {name}（已跟踪或非个人库链接）")
             conflicts += 1
@@ -314,7 +337,7 @@ def select_skills(library: Path) -> int:
         elif name in current:
             removals.add(name)
             print(f"移除链接: {name}")
-    precompose = (
+    precompose = is_git and (
         git(
             root,
             "config",
@@ -325,10 +348,11 @@ def select_skills(library: Path) -> int:
         )
         == "true"
     )
-    after = exclusion_update(before, actionable, removals, precompose)
-    print(f"Git 本地排除: {exclude}（{'更新' if before != after else '不变'}）")
-    for line in sorted(actionable):
-        print(f"  排除 .agents/skills/{line}")
+    if exclude is not None:
+        after = exclusion_update(before, actionable, removals, precompose)
+        print(f"Git 本地排除: {exclude}（{'更新' if before != after else '不变'}）")
+        for line in sorted(actionable):
+            print(f"  排除 .agents/skills/{line}")
     if not confirm("执行以上变更？"):
         print("已取消，无修改。")
         return 0
@@ -340,12 +364,13 @@ def select_skills(library: Path) -> int:
             or not (library / name / "SKILL.md").is_file()
         ):
             raise ValueError(f"预览后来源发生变化: {library / name}，请重试")
-    if exclude_bytes(exclude) != before:
+    if exclude is not None and exclude_bytes(exclude) != before:
         raise ValueError("Git exclude 在预览后发生变化，请重试")
     # Recheck the full plan before the first write; never overwrite a late arrival.
     for name in actionable | removals:
-        if signature(links / name) != states[name] or git(
-            root, "ls-files", "-z", "--", f":(literal).agents/skills/{name}"
+        if signature(links / name) != states[name] or (
+            is_git
+            and git(root, "ls-files", "-z", "--", f":(literal).agents/skills/{name}")
         ):
             raise ValueError(f"预览后路径发生变化: {links / name}，请重试")
     if actionable:
@@ -367,6 +392,8 @@ def select_skills(library: Path) -> int:
         except (OSError, ValueError) as error:
             print(f"失败: {name}: {error}")
             conflicts += 1
+    if exclude is None:
+        return 1 if conflicts else 0
     write_exclude(
         exclude, before, exclusion_update(before, linked, removed, precompose)
     )
@@ -485,6 +512,8 @@ def collect_one(
 
 
 def collect_skills(source: Path, library: Path) -> int:
+    if source == library or source in library.parents or library in source.parents:
+        raise ValueError("个人库与全局入口不能相同或互相包含")
     incoming = skills(source)
     real_directory(library / ".backups")
     if not incoming:
@@ -523,15 +552,103 @@ def collect_skills(source: Path, library: Path) -> int:
     return 1 if errors else 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="选择项目 skill 或归集全局 skill")
-    parser.add_argument("command", choices=["select", "collect"])
-    args = parser.parse_args(argv)
-    home = Path.home().resolve()
+def config_paths(config: object) -> tuple[Path, Path]:
+    if not isinstance(config, dict) or set(config) != {"library", "source"}:
+        raise ValueError("配置必须是仅包含 library 和 source 的 JSON 对象")
+    paths = []
+    for key in ("library", "source"):
+        value = config[key]
+        if (
+            not isinstance(value, str)
+            or not value.strip()
+            or any(ord(char) < 32 or ord(char) == 127 for char in value)
+        ):
+            raise ValueError(f"{key} 必须是非空路径，不能包含控制字符")
+        home = str(Path.home().resolve())
+        value = home + value[1:] if value == "~" or value.startswith("~/") else value
+        path = Path(value)
+        if not path.is_absolute():
+            raise ValueError(f"{key} 必须是绝对路径或 ~/ 开头的路径")
+        real_directory(path)
+        paths.append(Path(os.path.abspath(path)))
+    library, source = paths
+    if library == source or library in source.parents or source in library.parents:
+        raise ValueError("个人库与全局入口不能相同或互相包含")
+    return library, source
+
+
+def load_config(path: Path) -> dict[str, str]:
+    real_directory(path.parent)
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError(f"不是安全的配置文件: {path}")
     try:
-        if args.command == "select":
-            return select_skills(home / "my-skills")
-        return collect_skills(home / ".agents/skills", home / "my-skills")
+        config = (
+            json.loads(path.read_text(encoding="utf-8"))
+            if path.exists()
+            else {"library": "~/my-skills", "source": "~/.agents/skills"}
+        )
+        config_paths(config)
+    except (OSError, ValueError) as error:
+        raise ValueError(f"无法读取配置 {path}: {error}") from error
+    return config
+
+
+def init_config(path: Path, library: str | None, source: str | None) -> int:
+    before = signature(path)
+    config = load_config(path)
+    for key, value in (("library", library), ("source", source)):
+        config[key] = (
+            value
+            if value is not None
+            else (input(f"{key} [{config[key]}]: ").strip() or config[key])
+        )
+    config_paths(config)
+    print(json.dumps(config, ensure_ascii=False, indent=2))
+    print(f"配置文件: {path}")
+    print("仅保存配置，不移动 skill；修改个人库后，旧项目链接需自行迁移。")
+    if not confirm("保存以上配置？"):
+        print("已取消，无修改。")
+        return 0
+    real_directory(path.parent)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            stream.write(
+                (json.dumps(config, ensure_ascii=False, indent=2) + "\n").encode()
+            )
+            stream.flush()
+            os.fsync(stream.fileno())
+            if signature(path) != before:
+                raise ValueError("配置在预览后发生变化，请重试")
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+    print(f"已保存: {path}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="bang", description="个人 AI 环境初始化与 skill 管理"
+    )
+    commands = parser.add_subparsers(dest="command", required=True)
+    init = commands.add_parser("init", help="配置此设备的 skill 目录")
+    init.add_argument("--library", help="个人 skill 库（绝对路径或 ~/ 开头）")
+    init.add_argument("--source", help="待归集的全局入口（绝对路径或 ~/ 开头）")
+    skill = commands.add_parser("skill", help="管理 skill")
+    actions = skill.add_subparsers(dest="action", required=True)
+    actions.add_parser("select", help="选择并链接当前项目的 skill")
+    actions.add_parser("collect", help="将全局入口的 skill 归集到个人库")
+    args = parser.parse_args(argv)
+    path = Path.home().resolve() / ".config/bang/config.json"
+    try:
+        if args.command == "init":
+            return init_config(path, args.library, args.source)
+        library, source = config_paths(load_config(path))
+        if args.action == "select":
+            return select_skills(library)
+        return collect_skills(source, library)
     except (EOFError, KeyboardInterrupt):
         print("\n已取消。")
         return 130

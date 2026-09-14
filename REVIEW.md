@@ -1,5 +1,16 @@
 # 实现审查
 
+## bang 改造验收
+
+- 入口改为 `bang init` 与 `bang skill select/collect`；可从本地 Git 克隆通过 `uv tool install .` 安装，无运行时依赖。
+- 配置位于仓库外，校验目录、JSON 格式与来源/个人库重叠；确认后原子写入，保留旧排除标记及恢复目录格式。
+- 保留工作区原有的非 Git 项目选择改动与回归测试。
+- `python3 -B -m unittest -v`：34 项通过（包含真实 PTY 测试）；Ruff 与独立 Pyright 检查通过。
+- 临时虚拟环境安装后，`bang --help`、临时 HOME 下的 `bang init` 和 `bang skill collect` 冒烟验证通过。
+- 配置读取失败会报告配置文件位置，入口统一返回退出码；无效 JSON 的不写入行为有回归验证。
+
+以下为改名前的历史审查记录。
+
 基线：`d8ee8e0`（已确认规格）；首次实现：`51cec0d`。Standards 与 Spec 由两个独立只读子代理并行审查，修复后另做 Spec 复审。以下记录发现及处置，不替代验收测试。
 
 ## Standards
