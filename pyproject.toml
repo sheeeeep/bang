@@ -15,10 +15,11 @@ bang = "bang:main"
 
 [tool.setuptools]
 py-modules = ["bang"]
-packages = ["bang_templates"]
+packages = ["bang_templates", "bang_skills"]
 
 [tool.setuptools.package-data]
 bang_templates = ["*.md"]
+bang_skills = ["install/*.md", "personal/*/*.md", "personal/*/agents/*.yaml"]
 
 [tool.ruff]
 target-version = "py39"

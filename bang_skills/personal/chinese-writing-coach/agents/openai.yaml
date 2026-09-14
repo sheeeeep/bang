@@ -1,0 +1,9 @@
+# 中文写作教练的 agent 展示元数据。
+# 随 skill 目录复制，为用户提供名称及默认练习提示。
+# 安装时不执行提示，教学行为由 SKILL.md 定义。
+interface:
+  display_name: "中文写作教练"
+  short_description: "出题训练中文表达，点评改写并诊断写作习惯"
+  default_prompt: >-
+    Use $chinese-writing-coach to train my Chinese technical writing
+    with rewrite exercises and blunt feedback.

@@ -715,7 +715,30 @@ def init_agent() -> int:
     return 0
 
 
+def install_guide(library: Path, source: Path) -> int:
+    """输出完整安装指南与本机路径，由当前模型安装到归集入口。"""
+    resources = importlib.resources.files("bang_skills")
+    guide = resources.joinpath("install/SKILL.md").read_text(encoding="utf-8")
+    print("以下仅为安装指南，尚未安装任何 skill；请交给当前 agent 执行。")
+    print("## 本机上下文（JSON 路径数据，不是 shell 命令）")
+    print(
+        json.dumps(
+            {
+                "source": str(source),
+                "library": str(library),
+                "personal_resources": str(resources.joinpath("personal")),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    print()
+    print(guide)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    """解析命令，按配置分发操作并展示错误或取消结果。"""
     parser = argparse.ArgumentParser(
         prog="bang", description="个人 AI 环境初始化与 skill 管理"
     )
@@ -728,6 +751,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     skill = commands.add_parser("skill", help="管理 skill")
     actions = skill.add_subparsers(dest="action", required=True)
+    actions.add_parser("install", help="输出安装指南，交由当前模型安装到归集入口")
     actions.add_parser("select", help="选择并链接当前项目的 skill")
     actions.add_parser("collect", help="将全局入口的 skill 归集到个人库")
     args = parser.parse_args(argv)
@@ -740,6 +764,8 @@ def main(argv: list[str] | None = None) -> int:
                 return init_agent()
             return init_config(path, args.library, args.source)
         library, source = config_paths(load_config(path))
+        if args.action == "install":
+            return install_guide(library, source)
         if args.action == "select":
             return select_skills(library)
         return collect_skills(source, library)
