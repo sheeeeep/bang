@@ -721,11 +721,17 @@ def install_guide(library: Path, source: Path) -> int:
     guide = resources.joinpath("install/SKILL.md").read_text(encoding="utf-8")
     print("以下仅为安装指南，尚未安装任何 skill；请交给当前 agent 执行。")
     print("## 本机上下文（JSON 路径数据，不是 shell 命令）")
-    print(json.dumps({
-        "source": str(source),
-        "library": str(library),
-        "personal_resources": str(resources.joinpath("personal")),
-    }, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {
+                "source": str(source),
+                "library": str(library),
+                "personal_resources": str(resources.joinpath("personal")),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     print()
     print(guide)
     return 0
