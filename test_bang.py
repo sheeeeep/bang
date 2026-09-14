@@ -94,29 +94,39 @@ class CliTests(unittest.TestCase):
                     self.library = self.home / "个人库"
                     self.skill(self.source, "existing", "keep")
                     config.parent.mkdir(parents=True)
-                    config.write_text(json.dumps({
-                        "source": str(self.source), "library": str(self.library),
-                    }))
+                    config.write_text(
+                        json.dumps(
+                            {
+                                "source": str(self.source),
+                                "library": str(self.library),
+                            }
+                        )
+                    )
                 before = bang.tree_state(self.home)
                 result = self.cli("install", "")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(bang.tree_state(self.home), before)
                 self.assertIn("尚未安装任何 skill", result.stdout)
                 context, guide = result.stdout.split("\n\n", 1)
-                data = json.loads(context[context.index("{"):])
+                data = json.loads(context[context.index("{") :])
                 self.assertEqual(data["source"], str(self.source))
                 self.assertEqual(data["library"], str(self.library))
-                self.assertEqual(guide.rstrip(), (
-                    CLI.parent / "bang_skills/install/SKILL.md"
-                ).read_text().rstrip())
+                self.assertEqual(
+                    guide.rstrip(),
+                    (CLI.parent / "bang_skills/install/SKILL.md").read_text().rstrip(),
+                )
                 resources = Path(data["personal_resources"])
-                self.assertEqual(set(bang.skills(resources)), {
-                    "chinese-writing-coach", "personal-to-spec",
-                })
+                self.assertEqual(
+                    set(bang.skills(resources)),
+                    {
+                        "chinese-writing-coach",
+                        "personal-to-spec",
+                    },
+                )
                 for name in bang.skills(resources):
-                    self.assertIn(f"name: {name}\n", (
-                        resources / name / "SKILL.md"
-                    ).read_text())
+                    self.assertIn(
+                        f"name: {name}\n", (resources / name / "SKILL.md").read_text()
+                    )
                     self.assertTrue((resources / name / "agents/openai.yaml").is_file())
                 self.assertIn("writing-great-skills（来源待确认）", guide)
                 self.assertIn("bang skill collect", guide)
