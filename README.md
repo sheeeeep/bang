@@ -1,5 +1,7 @@
 # bang
 
+AI Code Agent的初始化工具
+
 把常用的 AI skill 集中保存，按项目选择启用，不必到处复制。
 
 - **选择**：在项目里勾选 skill，通过软链接引用个人库；取消选择不删除个人库内容。
@@ -9,42 +11,29 @@
 
 ## 快速开始
 
-### 下载并运行
+### 安装为 `bang` 命令（推荐）
 
-仓库目前为私有仓库，需要有访问权限。已配置 GitHub SSH 授权时：
+已有 [uv](https://docs.astral.sh/uv/getting-started/installation/) 和 Git 时，一条命令安装：
 
 ```sh
-git clone --branch feat-bang git@github.com:sheeeeep/bang.git
+uv tool install 'git+https://github.com/sheeeeep/bang.git@master'
+```
+
+然后运行 `bang --help`。如果提示找不到命令，执行 `uv tool update-shell` 并按提示重开终端。
+
+仓库已公开，无需 GitHub 登录、SSH 授权或手动克隆。目前尚未发布到 PyPI 或 Homebrew，**不要从 PyPI 安装同名包**。
+
+### 不使用 uv：下载后直接运行
+
+已有 Python 和 Git 即可：
+
+```sh
+git clone https://github.com/sheeeeep/bang.git
 cd bang
 python3 bang.py --help
 ```
 
-当前使用 `feat-bang` 分支。无需安装 `uv` 或 `gh` 即可运行。
-
-#### 没有 SSH 授权？使用 GitHub CLI 下载
-
-安装 [GitHub CLI](https://cli.github.com/) 后执行；浏览器登录不等于 CLI 已授权：
-
-```sh
-gh auth login --hostname github.com --git-protocol https --web
-gh auth setup-git
-gh repo clone sheeeeep/bang -- --branch feat-bang
-cd bang
-python3 bang.py --help
-```
-
-### 可选：安装为 `bang` 命令
-
-如果已安装 [uv](https://docs.astral.sh/uv/getting-started/installation/)，在下载的仓库目录执行：
-
-```sh
-uv tool install .
-uv tool update-shell
-```
-
-按提示重开终端后，即可在任意目录使用 `bang`。请从本地克隆安装，**不要从 PyPI 安装同名包**。
-
-下文以 `bang` 为例；不安装也可以将它替换为 `python3 /你的路径/bang/bang.py`。
+下文以 `bang` 为例；直接运行时将它替换为 `python3 /你的路径/bang/bang.py`。
 
 ## 日常使用
 
@@ -52,11 +41,13 @@ uv tool update-shell
 
 默认目录如下，无需先运行初始化命令：
 
-| 目录 | 用途 |
-| --- | --- |
-| `~/my-skills` | 保存你要复用的 skill |
-| `~/.agents/skills` | 待归集的全局入口 |
+
+| 目录                   | 用途                 |
+| -------------------- | ------------------ |
+| `~/my-skills`        | 保存你要复用的 skill      |
+| `~/.agents/skills`   | 待归集的全局入口           |
 | 项目内 `.agents/skills` | 存放当前项目选择的 skill 链接 |
+
 
 每个 skill 是一个包含 `SKILL.md` 的目录，例如：
 
@@ -112,17 +103,13 @@ bang init --library '~/my-skills' --source '~/.agents/skills'
 
 ## 更新
 
-在下载的 bang 仓库目录运行：
+通过 uv 从 GitHub 安装的用户，重新安装最新 `master`：
 
 ```sh
-git pull --ff-only
+uv tool install --reinstall --refresh 'git+https://github.com/sheeeeep/bang.git@master'
 ```
 
-如果通过 uv 安装了命令，再执行：
-
-```sh
-uv tool install --reinstall .
-```
+直接运行源码的用户，在下载的 bang 仓库目录执行 `git pull --ff-only`。如果此前通过 `uv tool install .` 安装，拉取后再执行 `uv tool install --reinstall .`。
 
 ## 常见问题
 
