@@ -57,7 +57,19 @@ python3 bang.py --help
     └── SKILL.md
 ```
 
-可以直接把已有 skill 放入个人库。若它们已在全局入口中，在任意目录运行：
+需要下载 skill 时，在 agent 会话中让模型执行并遵循输出：
+
+```sh
+bang skill install
+```
+
+**这条命令只输出指南，不调用模型、不安装文件、不修改配置。** 普通终端运行后，请把输出交给你的 agent。模型按指南展示 lark、mattpocock、个人及独立 skill，让你选择并确认，再安装到已配置的全局入口 `source`（默认 `~/.agents/skills`）。不直接写入个人库，也不自动执行归集或项目选择。要更改目录，先运行 `bang init`；`install` 不接受目录参数。
+
+安装指南内置于 [`bang_skills/install/SKILL.md`](bang_skills/install/SKILL.md)。个人版 `chinese-writing-coach`、`personal-to-spec` 随包分发，后者与 Matt 原版 `to-spec` 可共存。`writing-great-skills` 来源尚未确认，会单独标注并跳过，提供可信来源后才安装。工具依赖安装和登录授权另行确认。
+
+模型安装完成后，由你自行执行下方归集命令，再运行 `bang skill select`。仅输出指南或安装到入口，还不会出现在个人库选择列表中。
+
+也可以直接把已有 skill 放入个人库。若它们已在全局入口中，在任意目录运行：
 
 ```sh
 bang skill collect

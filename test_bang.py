@@ -82,6 +82,59 @@ class CliTests(unittest.TestCase):
             check=False,
         )
 
+    def test_install_guide_is_read_only_and_uses_config(self):
+        """验证默认与自定义入口、完整指南及内置资源，输出不改变 HOME。"""
+        # 排除 macOS Python 在 HOME/Library 写入的解释器字节码缓存。
+        self.env["PYTHONDONTWRITEBYTECODE"] = "1"
+        config = self.home / ".config/bang/config.json"
+        for custom in (False, True):
+            with self.subTest(custom=custom):
+                if custom:
+                    self.source = self.home / "暂存 skills"
+                    self.library = self.home / "个人库"
+                    self.skill(self.source, "existing", "keep")
+                    config.parent.mkdir(parents=True)
+                    config.write_text(json.dumps({
+                        "source": str(self.source), "library": str(self.library),
+                    }))
+                before = bang.tree_state(self.home)
+                result = self.cli("install", "")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(bang.tree_state(self.home), before)
+                self.assertIn("尚未安装任何 skill", result.stdout)
+                context, guide = result.stdout.split("\n\n", 1)
+                data = json.loads(context[context.index("{"):])
+                self.assertEqual(data["source"], str(self.source))
+                self.assertEqual(data["library"], str(self.library))
+                self.assertEqual(guide.rstrip(), (
+                    CLI.parent / "bang_skills/install/SKILL.md"
+                ).read_text().rstrip())
+                resources = Path(data["personal_resources"])
+                self.assertEqual(set(bang.skills(resources)), {
+                    "chinese-writing-coach", "personal-to-spec",
+                })
+                for name in bang.skills(resources):
+                    self.assertIn(f"name: {name}\n", (
+                        resources / name / "SKILL.md"
+                    ).read_text())
+                    self.assertTrue((resources / name / "agents/openai.yaml").is_file())
+                self.assertIn("writing-great-skills（来源待确认）", guide)
+                self.assertIn("bang skill collect", guide)
+                self.assertFalse(self.library.exists())
+
+    def test_install_guide_reports_invalid_config(self):
+        """损坏配置应显式失败，不输出误导性的默认路径或修改配置。"""
+        self.env["PYTHONDONTWRITEBYTECODE"] = "1"
+        config = self.home / ".config/bang/config.json"
+        config.parent.mkdir(parents=True)
+        config.write_text("{broken")
+        before = bang.tree_state(self.home)
+        result = self.cli("install", "")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("无法读取配置", result.stdout)
+        self.assertNotIn("personal_resources", result.stdout)
+        self.assertEqual(bang.tree_state(self.home), before)
+
     def test_init_agent_creation_backup_and_cancellation(self):
         """验证两种模板的创建、备份与各阶段取消。"""
         template = CLI.parent / "bang_templates/AGENTS.common.md"

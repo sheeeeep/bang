@@ -1,0 +1,16 @@
+{
+  "features": [
+    {
+      "id": "read-only-install-guide",
+      "description": "输出完整安装指南和已配置的归集入口，不执行安装或写配置",
+      "status": "completed",
+      "verification": "python3 -B -m unittest -q：41 项通过；主语言服务器 0 诊断；空 HOME、仓库外 wheel 命令验证通过"
+    },
+    {
+      "id": "bundled-personal-skills",
+      "description": "随包分发 chinese-writing-coach 与独立命名的 personal-to-spec",
+      "status": "completed",
+      "verification": "uv build --wheel 和临时环境安装成功；全部 Markdown/YAML 资源与源码逐字节一致，输出路径可读取且不依赖原机器个人库"
+    }
+  ]
+}

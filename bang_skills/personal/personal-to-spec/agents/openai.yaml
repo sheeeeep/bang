@@ -1,0 +1,9 @@
+---
+# 个人规格 skill 的 agent 展示元数据。
+# 随完整目录安装，使用独立名称区分 Matt 原版。
+# 仅由用户显式调用，不在安装时生成规格。
+interface:
+  display_name: "Personal To Spec"
+  short_description: "将当前对话整理成中文规格说明"
+policy:
+  allow_implicit_invocation: false
