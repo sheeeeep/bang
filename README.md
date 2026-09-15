@@ -112,6 +112,34 @@ bang init agent
 - 拒绝覆盖软链接和非普通文件；取消不修改文件。失败时查看输出的备份路径，保全现有内容后可用备份恢复。
 - 不修改 Git 排除规则，备份由你确认无用后手动清理。执行期间请勿同时编辑目标文件。
 
+### 4. 备份并同步 pi 插件配置
+
+在 bang 源码仓库运行工程脚本（重复执行会覆盖更新备份）：
+
+```sh
+python3 scripts/backup_pi.py
+# 已安装的 bang 需要重新安装，才能使用更新后的内置备份：
+uv tool install --reinstall .
+```
+
+备份保存在 `bang_pi/config.json`，随 bang 一起打包。新设备安装包含该备份的 bang 后，在需要工作的目录运行：
+
+```sh
+bang pi launch
+bang pi launch --continue
+```
+
+- 先安装 pi（及其所需 Node/npm、Git），确保 `pi` 在 PATH 中；不需要先运行 `bang init`。
+- 主配置来源和目标默认是 `~/.pi/agent`，可用绝对路径 `PI_CODING_AGENT_DIR` 指定；自动命名插件当前固定读取 HOME 下的 `~/.pi/agent/extensions/pi-session-auto-rename.json`，脚本和同步遵循该实际路径。脚本写回 bang 工程，与执行时所在目录无关；launch 使用安装包内的备份，不扫描当前项目。
+- 白名单包括插件 `packages` 清单、主题、默认模型/provider、思考级别、思考块显示设置，以及 `extensions/pi-session-auto-rename.json` 的命名模型 provider/id。
+- 清单目前支持 `npm:包[@版本]`、`git:主机/作者/仓库[@引用]` 字符串；不支持本地路径、包过滤对象或携带认证的 URL，遇到这些输入明确失败，不会静默丢弃插件。未来新增插件的独立设置须审查后扩展白名单。
+- 同步覆盖受管理字段，清除备份中已移除的受管字段，但保留设备其他字段和文件；不删除多余的已安装包或本地扩展。`auth.json` 完全不读写，凭据不进备份；不要把凭据填进模型/主题标识等普通字段。
+- 不备份桌面应用生成的扩展、外部 skill 链接、prompts、缓存、会话、信任记录和版本热修复；这不是完整设备镜像。
+- **缺失插件由 pi 启动时原生安装**，需要联网；不会每次 launch 强制升级已安装插件。未固定版本的来源不保证不同设备安装出相同版本。离线模式下 pi 可能跳过缺失插件。
+- 参数传给 pi，保持当前工作目录、登录流程与项目授权提示，退出码向上传递。`bang pi launch --help` 也会先同步，再显示 pi 帮助；查看 bang 命令说明用 `bang pi --help`。
+- 使用配置前先检查备份来源：插件具有代码执行能力。账号认证及桌面集成需在设备自行准备，bang 不绕过权限或安装系统软件。
+- 拒绝软链接和非普通配置文件。写入逐文件原子替换，不是多文件事务；请勿同时编辑配置。失败会输出错误，已同步文件保留，修复后重跑；如需保留设备原有受管设置，请在首次 launch 前自行备份。
+
 ### 可选：更换目录
 
 ```sh
@@ -141,7 +169,7 @@ uv tool install --reinstall --refresh 'git+https://github.com/sheeeeep/bang.git@
 
 ### 新设备需要重新准备什么？
 
-下载 bang，并另行复制个人 skill 库，或用独立私有 Git 仓库同步个人库。bang 不负责跨设备同步。
+下载 bang，并另行复制个人 skill 库，或用独立私有 Git 仓库同步个人库。bang 不负责跨设备同步个人 skill 库；pi 插件配置可按上文通过 `bang pi launch` 同步。
 
 路径不同时运行 `bang init`。不要复制旧设备的项目软链接，在各项目重新运行 `bang skill select`。
 

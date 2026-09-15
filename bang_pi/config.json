@@ -1,0 +1,29 @@
+{
+  "settings.json": {
+    "theme": "light/dark",
+    "defaultProvider": "openai-codex",
+    "defaultModel": "gpt-6-astra",
+    "defaultThinkingLevel": "medium",
+    "packages": [
+      "npm:pi-web-access",
+      "npm:@juicesharp/rpiv-ask-user-question",
+      "git:github.com/DietrichGebert/ponytail",
+      "npm:@narumitw/pi-plan-mode",
+      "npm:pi-lens",
+      "npm:cc-safety-net",
+      "npm:pi-simplify",
+      "npm:@juicesharp/rpiv-todo",
+      "npm:pi-markdown-preview",
+      "npm:@ff-labs/pi-fff",
+      "npm:@narumitw/pi-btw",
+      "npm:pi-tool-display",
+      "npm:@ogulcancelik/pi-herdr",
+      "npm:pi-session-auto-rename"
+    ],
+    "hideThinkingBlock": true
+  },
+  "extensions/pi-session-auto-rename.json": {
+    "provider": "openai-codex",
+    "id": "gpt-5.5"
+  }
+}
