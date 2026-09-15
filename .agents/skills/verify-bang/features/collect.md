@@ -1,6 +1,6 @@
 # 把全局入口归集到个人库
 
-用户预览并确认搬入 skill；同名旧版先备份再整份替换，成功后全局入口不再保留原目录或链接。
+用户确认预览后，bang 将 skill 从全局入口搬入个人库。个人库中已有同名 skill 时，先备份旧版，再整份替换。成功后会移除全局入口中的原目录，不留下软链接。
 
 ## Sub-features
 
@@ -11,11 +11,11 @@
 
 ## How to get to it (user POV)
 
-任意目录运行 `bang skill collect`，读取配置的 source/library；不要求在 Git 项目内。
+在任意目录运行 `bang skill collect`。bang 根据配置中的 source 和 library 确定来源与目标，不要求当前目录属于 Git 项目。
 
 ## Driving it with CLI pipes
 
-Preconditions: Launch 的全新隔离 bash；默认配置，不使用用户全局目录。
+Preconditions: 按 Launch 准备新的独立 bash 环境，使用默认配置。所有来源和目标目录都必须位于临时 HOME 中。
 
 - **搬入。** 运行下方命令，须看到 `搬入: alpha`、`成功: alpha`；目标内容相同，来源不存在。
 
@@ -41,10 +41,10 @@ cp -R "$HOME/my-skills" "$EVIDENCE/collect-library"
 echo 'collect-new collect-cancel collect-replace rc=0'
 ```
 
-- **冲突。** 全新基线准备来源 alpha，目标 `mkdir -p "$HOME/my-skills/alpha"` 但不创建 SKILL.md，再输入 y；返回 1、输出 `冲突，跳过非真实 skill 目标`，来源保持、目标仍为空。将错误输出与退出码单独保存。
+- **冲突。** 在新的临时环境中准备来源 alpha，再用 `mkdir -p "$HOME/my-skills/alpha"` 创建目标目录，但不要创建 SKILL.md。运行归集命令并输入 y，预期退出码为 1，输出 `冲突，跳过非真实 skill 目标`，来源内容应保持不变，目标目录仍为空。将错误输出与退出码单独保存。
 
 ## Gotchas
 
 - collect 是搬入，不是复制；只能在临时 HOME 验证。
-- 备份在 `.backups/skill-*/old`，升级后的旧版证据须在清理前复制出。
-- 无配置使用默认值；配置损坏应返回错误，不应继续驱动。
+- 备份在 `.backups/skill-*/old`，清理前须将旧版备份复制到证据目录。
+- 没有配置文件时使用默认值。配置损坏时应报错，此时先处理错误，不要继续发送输入。
