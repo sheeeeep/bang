@@ -1,0 +1,10 @@
+{
+  "features": [
+    {
+      "id": "verification-skill-and-map",
+      "description": "生成 bang 验证技能、五项地图及复用 PTY 的证明脚本",
+      "status": "completed",
+      "verification": "doctor、真实 PTY 增删与清理通过；五份地图 bash 配方通过；脚本主动 LSP 0 诊断；技能结构和证据留存检查通过。证据：/tmp/bang-evidence.MW1DR4/"
+    }
+  ]
+}
