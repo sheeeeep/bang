@@ -15,9 +15,10 @@ bang = "bang:main"
 
 [tool.setuptools]
 py-modules = ["bang"]
-packages = ["bang_templates", "bang_skills"]
+packages = ["bang_templates", "bang_skills", "bang_pi"]
 
 [tool.setuptools.package-data]
+bang_pi = ["*.json"]
 bang_templates = ["*.md"]
 bang_skills = ["install/*.md", "personal/*/*.md", "personal/*/agents/*.yaml"]
 
@@ -27,5 +28,5 @@ target-version = "py39"
 [tool.pyright]
 pythonVersion = "3.9"
 typeCheckingMode = "basic"
-include = ["bang.py", "test_bang.py", "test_terminal.py"]
+include = ["bang.py", "test_bang.py", "test_terminal.py", "test_pi.py", "scripts/backup_pi.py"]
 extraPaths = ["."]

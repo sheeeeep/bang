@@ -8,6 +8,7 @@ import curses
 import importlib.resources
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -737,6 +738,189 @@ def install_guide(library: Path, source: Path) -> int:
     return 0
 
 
+# 只迁移已审查的声明式字段，不复制任意插件文件或命令。
+PI_FIELDS = {
+    "settings.json": {
+        "packages",
+        "theme",
+        "defaultProvider",
+        "defaultModel",
+        "defaultThinkingLevel",
+        "hideThinkingBlock",
+    },
+    "extensions/pi-session-auto-rename.json": {"provider", "id"},
+}
+PI_SOURCE = re.compile(
+    r"(?:npm:(?:@[a-z0-9._-]+/)?[a-z0-9][a-z0-9._-]*"
+    r"(?:@[A-Za-z0-9][A-Za-z0-9._+-]*)?"
+    r"|git:[a-z0-9][a-z0-9.-]*\.[a-z]{2,}/"
+    r"[A-Za-z0-9_-]+/[A-Za-z0-9_-][A-Za-z0-9._-]*"
+    r"(?:@[A-Za-z0-9][A-Za-z0-9._-]*)?)"
+)
+
+
+def pi_agent_dir() -> Path:
+    """按 pi 的环境变量或 HOME 选择设备配置根目录。"""
+    path = Path(
+        os.environ.get("PI_CODING_AGENT_DIR") or Path.home().resolve() / ".pi/agent"
+    ).expanduser()
+    if not path.is_absolute():
+        raise ValueError("PI_CODING_AGENT_DIR 必须是绝对路径")
+    return path
+
+
+def pi_config_path(root: Path, filename: str) -> Path:
+    """遵循自动命名插件固定 HOME 路径的行为，其余配置使用 pi 根目录。"""
+    if filename == "extensions/pi-session-auto-rename.json":
+        return Path.home().resolve() / ".pi/agent" / filename
+    return root / filename
+
+
+def pi_check_file(path: Path) -> None:
+    """拒绝配置文件及祖先软链接，避免覆盖或读取其他位置。"""
+    real_directory(path.parent)
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError(f"不是安全的普通配置文件: {path}")
+
+
+def pi_read_json(path: Path) -> dict:
+    """读取 JSON 对象，解析错误只报告位置而不泄露配置内容。"""
+    pi_check_file(path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, UnicodeError) as error:
+        raise ValueError(f"配置不是有效 JSON: {path}") from error
+    if not isinstance(data, dict):
+        raise TypeError(f"配置必须是 JSON 对象: {path}")
+    return data
+
+
+def pi_validate_snapshot(data: object) -> dict:
+    """验证白名单快照、字段类型与无内嵌认证的 npm/git 来源。"""
+    if not isinstance(data, dict) or set(data) - PI_FIELDS.keys():
+        raise ValueError("pi 备份包含不支持的文件")
+    if (
+        not isinstance(data.get("settings.json"), dict)
+        or "packages" not in data["settings.json"]
+    ):
+        raise ValueError("pi 备份缺少插件安装清单")
+    for filename, settings in data.items():
+        if not isinstance(settings, dict) or set(settings) - PI_FIELDS[filename]:
+            raise ValueError(f"pi 备份包含不支持的字段: {filename}")
+        for key, value in settings.items():
+            if key == "packages":
+                if not isinstance(value, list) or any(
+                    not isinstance(source, str) or not PI_SOURCE.fullmatch(source)
+                    for source in value
+                ):
+                    raise ValueError(
+                        "插件清单只支持无凭据的 npm:包[@版本] 和 git:主机/作者/仓库[@引用] 字符串"
+                    )
+            elif key == "hideThinkingBlock":
+                if not isinstance(value, bool):
+                    raise ValueError("hideThinkingBlock 必须是布尔值")
+            elif key == "defaultThinkingLevel":
+                if value not in (
+                    "off",
+                    "minimal",
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max",
+                ):
+                    raise ValueError("defaultThinkingLevel 无效")
+            elif (
+                not isinstance(value, str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/:+-]{0,199}", value)
+                or ".." in value
+                or "://" in value
+                or value.startswith(("sk-", "sk_", "ghp_", "github_pat_"))
+            ):
+                raise ValueError(f"字段必须是可移植的主题或模型标识: {filename}/{key}")
+    return data
+
+
+def pi_write_json(path: Path, data: dict) -> None:
+    """通过同目录临时文件原子替换配置，失败时清理临时文件。"""
+    pi_check_file(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            stream.write(
+                (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode()
+            )
+            stream.flush()
+            os.fsync(stream.fileno())
+            pi_check_file(path)
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def backup_pi(destination: Path) -> None:
+    """将设备上的白名单字段保存为可覆盖更新的工程快照。"""
+    root = pi_agent_dir()
+    snapshot = {}
+    for filename, fields in PI_FIELDS.items():
+        path = pi_config_path(root, filename)
+        pi_check_file(path)
+        if filename == "settings.json" or path.exists():
+            settings = pi_read_json(path)
+            snapshot[filename] = {
+                key: value for key, value in settings.items() if key in fields
+            }
+    snapshot["settings.json"].setdefault("packages", [])
+    pi_write_json(destination, pi_validate_snapshot(snapshot))
+    print(f"已覆盖保存 pi 配置: {destination}")
+    print("仅包含白名单设置与安装清单；凭据、未知字段、桌面扩展和运行状态未备份。")
+
+
+def launch_pi(arguments: list[str]) -> int:
+    """覆盖设备受管配置后在当前目录启动 pi，由 pi 原生恢复缺失插件。"""
+    executable = shutil.which("pi")
+    if not executable:
+        raise ValueError(
+            "找不到 pi，请先安装 pi 及其 Node/npm 运行环境，并确保 pi 位于 PATH"
+        )
+    try:
+        data = json.loads(
+            importlib.resources.files("bang_pi")
+            .joinpath("config.json")
+            .read_text(encoding="utf-8")
+        )
+    except (ValueError, UnicodeError) as error:
+        raise ValueError("内置 pi 备份不是有效 JSON，请重新备份并安装 bang") from error
+    snapshot = pi_validate_snapshot(data)
+    root = pi_agent_dir()
+    pending = []
+    # 先读取和检查所有目标，避免后一个文件损坏时已覆盖前一个。
+    for filename, fields in PI_FIELDS.items():
+        path = pi_config_path(root, filename)
+        pi_check_file(path)
+        existing = pi_read_json(path) if path.exists() else {}
+        updated = {key: value for key, value in existing.items() if key not in fields}
+        updated.update(snapshot.get(filename, {}))
+        if updated != existing or (filename == "settings.json" and not path.exists()):
+            pending.append((path, updated))
+    for path, updated in pending:
+        pi_write_json(path, updated)
+        print(f"已同步: {path}", file=sys.stderr, flush=True)
+    print(
+        "启动 pi；缺失插件由 pi 原生安装，登录凭据由当前设备提供。",
+        file=sys.stderr,
+        flush=True,
+    )
+    result = subprocess.run([executable, *arguments], check=False)
+    if result.returncode:
+        print(
+            f"pi 退出失败（状态 {result.returncode}）；配置已同步，请检查上方错误并修复后重试。",
+            file=sys.stderr,
+        )
+    return result.returncode if result.returncode >= 0 else 128 - result.returncode
+
+
 def main(argv: list[str] | None = None) -> int:
     """解析命令，按配置分发操作并展示错误或取消结果。"""
     parser = argparse.ArgumentParser(
@@ -754,9 +938,25 @@ def main(argv: list[str] | None = None) -> int:
     actions.add_parser("install", help="输出安装指南，交由当前模型安装到归集入口")
     actions.add_parser("select", help="选择并链接当前项目的 skill")
     actions.add_parser("collect", help="将全局入口的 skill 归集到个人库")
-    args = parser.parse_args(argv)
+    pi_command = commands.add_parser("pi", help="同步 pi 插件配置并启动")
+    pi_actions = pi_command.add_subparsers(dest="pi_action", required=True)
+    launch = pi_actions.add_parser(
+        "launch", help="覆盖受管配置并启动 pi", add_help=False
+    )
+    launch.add_argument("pi_args", nargs=argparse.REMAINDER)
+    # launch 后的参数全部属于 pi，包括 --help 和以短横线开头的选项。
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if raw[:2] == ["pi", "launch"]:
+        args = parser.parse_args(raw[:2])
+        args.pi_args = raw[2:]
+        if args.pi_args[:1] == ["--"]:
+            args.pi_args = args.pi_args[1:]
+    else:
+        args = parser.parse_args(raw)
     path = Path.home().resolve() / ".config/bang/config.json"
     try:
+        if args.command == "pi":
+            return launch_pi(args.pi_args)
         if args.command == "init":
             if args.init_action == "agent":
                 if args.library is not None or args.source is not None:
@@ -772,7 +972,7 @@ def main(argv: list[str] | None = None) -> int:
     except (EOFError, KeyboardInterrupt):
         print("\n已取消。")
         return 130
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, TypeError) as error:
         print(f"错误: {error}")
         return 1
 

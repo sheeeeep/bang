@@ -1,0 +1,10 @@
+{
+  "features": [
+    {
+      "id": "pi-backup-launch",
+      "description": "工程脚本覆盖更新可移植 pi 插件配置与安装清单；bang pi launch 同步并启动，保留设备凭据",
+      "status": "completed",
+      "verification": "python3 -B -m unittest -q：52 项通过；pyright 0 问题；4 个改动 Python 文件主 LSP 0 诊断；隔离 wheel 安装及真实 pi --version 通过；真实 npm 缺失包恢复/RPC 启动与安装失败退出码通过；git diff --check 通过。边界见 progress.md"
+    }
+  ]
+}
